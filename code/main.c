@@ -53,6 +53,35 @@ int WINAPI WinMain(
         0
     );
 
+    //
+    //
+    //
+
+    VkApplicationInfo appInfo;
+    ZeroMemory(&appInfo, sizeof(VkApplicationInfo));
+    appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+    appInfo.pApplicationName = "Hello Triangle";
+    appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
+    appInfo.pEngineName = "No Engine";
+    appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
+    appInfo.apiVersion = VK_API_VERSION_1_0;
+
+    VkInstanceCreateInfo createInfo;
+    ZeroMemory(&createInfo, sizeof(VkInstanceCreateInfo));
+    createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    createInfo.pApplicationInfo = &appInfo;
+    createInfo.enabledExtensionCount = 1;
+    char* extensionNames[1];
+    extensionNames[0] = VK_KHR_WIN32_SURFACE_EXTENSION_NAME;
+    createInfo.ppEnabledExtensionNames = extensionNames;
+    createInfo.enabledLayerCount = 0;
+    VkInstance vulkanInstance;
+    VkResult result = vkCreateInstance(&createInfo, 0, &vulkanInstance);
+
+    //
+    //
+    //
+
     ShowWindow(window, SW_SHOWMINIMIZED);
     ShowWindow(window, SW_SHOWNORMAL);
 
