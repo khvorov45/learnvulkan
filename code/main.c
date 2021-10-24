@@ -70,9 +70,10 @@ int WINAPI WinMain(
     ZeroMemory(&createInfo, sizeof(VkInstanceCreateInfo));
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     createInfo.pApplicationInfo = &appInfo;
-    createInfo.enabledExtensionCount = 1;
-    char* extensionNames[1];
-    extensionNames[0] = VK_KHR_WIN32_SURFACE_EXTENSION_NAME;
+    createInfo.enabledExtensionCount = 2;
+    char* extensionNames[2];
+    extensionNames[0] = VK_KHR_SURFACE_EXTENSION_NAME;
+    extensionNames[1] = VK_KHR_WIN32_SURFACE_EXTENSION_NAME;
     createInfo.ppEnabledExtensionNames = extensionNames;
     createInfo.enabledLayerCount = 1;
     char* layerNames[1];
@@ -80,7 +81,7 @@ int WINAPI WinMain(
     createInfo.ppEnabledLayerNames = layerNames;
 
     VkInstance vulkanInstance;
-    VkResult result = vkCreateInstance(&createInfo, 0, &vulkanInstance);
+    VkResult createInstanceResult = vkCreateInstance(&createInfo, 0, &vulkanInstance);
 
     //
     //
