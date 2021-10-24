@@ -1,0 +1,16 @@
+{
+  "files.associations": {
+    "vulkan.h": "c"
+  },
+  "cSpell.words": [
+    "HBRUSH",
+    "HREDRAW",
+    "HWND",
+    "lpfn",
+    "LPSTR",
+    "LPWSTR",
+    "VREDRAW",
+    "WNDCLASSEX",
+    "WNDCLASSEXW"
+  ]
+}

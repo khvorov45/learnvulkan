@@ -1,0 +1,22 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "My Task",
+      "command": "build.sh",
+      "windows": {
+        "command": "build.local.bat"
+      },
+      "type": "process",
+      "args": [],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    }
+  ]
+}

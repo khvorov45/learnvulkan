@@ -1,0 +1,68 @@
+#include "stdint.h"
+
+#include "windows.h"
+
+#include "vulkan/vulkan.h"
+#include "vulkan/vulkan_win32.h"
+
+#define true 1
+#define false 0
+
+typedef uint32_t u32;
+typedef int32_t i32;
+typedef size_t usize;
+typedef intptr_t isize;
+typedef int32_t b32;
+typedef float f32;
+
+int WINAPI WinMain(
+    HINSTANCE hInstance,
+    HINSTANCE hPrevInstance,
+    LPSTR     lpCmdLine,
+    int       nShowCmd
+) {
+    wchar_t* applicationName = L"LearnVulkan";
+
+    WNDCLASSEXW windowClass;
+    ZeroMemory(&windowClass, sizeof(WNDCLASSEXW));
+    windowClass.cbSize = sizeof(WNDCLASSEX);
+    windowClass.style = CS_HREDRAW | CS_VREDRAW;
+    windowClass.lpfnWndProc = DefWindowProcW;
+    windowClass.hInstance = hInstance;
+    windowClass.hCursor = LoadCursorW(0, (LPWSTR)IDC_ARROW);;
+    windowClass.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    windowClass.lpszClassName = applicationName;
+
+    RegisterClassExW(&windowClass);
+
+    i32 windowWidth = 1280;
+    i32 windowHeight = 720;
+
+    HWND window = CreateWindowExW(
+        0,
+        applicationName,
+        applicationName,
+        WS_OVERLAPPEDWINDOW | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        windowWidth,
+        windowHeight,
+        0,
+        0,
+        hInstance,
+        0
+    );
+
+    ShowWindow(window, SW_SHOWMINIMIZED);
+    ShowWindow(window, SW_SHOWNORMAL);
+
+    for (;;) {
+        MSG message;
+        while (PeekMessageW(&message, window, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+    }
+
+    return 0;
+}
