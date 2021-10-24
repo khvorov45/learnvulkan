@@ -74,7 +74,11 @@ int WINAPI WinMain(
     char* extensionNames[1];
     extensionNames[0] = VK_KHR_WIN32_SURFACE_EXTENSION_NAME;
     createInfo.ppEnabledExtensionNames = extensionNames;
-    createInfo.enabledLayerCount = 0;
+    createInfo.enabledLayerCount = 1;
+    char* layerNames[1];
+    layerNames[0] = "VK_LAYER_KHRONOS_validation";
+    createInfo.ppEnabledLayerNames = layerNames;
+
     VkInstance vulkanInstance;
     VkResult result = vkCreateInstance(&createInfo, 0, &vulkanInstance);
 
