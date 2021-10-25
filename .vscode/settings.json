@@ -6,6 +6,7 @@
     "HBRUSH",
     "HREDRAW",
     "HWND",
+    "LPARAM",
     "lpfn",
     "LPSTR",
     "LPWSTR",

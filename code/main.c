@@ -415,6 +415,15 @@ int WINAPI WinMain(
 
     VkRenderPass renderPass;
     {
+        VkSubpassDependency dependency;
+        zero(dependency);
+        dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+        dependency.dstSubpass = 0;
+        dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependency.srcAccessMask = 0;
+        dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
         VkRenderPassCreateInfo renderPassInfo;
         zero(renderPassInfo);
         renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
@@ -422,6 +431,8 @@ int WINAPI WinMain(
         renderPassInfo.pAttachments = &colorAttachment;
         renderPassInfo.subpassCount = 1;
         renderPassInfo.pSubpasses = &subpass;
+        renderPassInfo.dependencyCount = 1;
+        renderPassInfo.pDependencies = &dependency;
 
         VkResult result = vkCreateRenderPass(device, &renderPassInfo, 0, &renderPass);
         assert(result == VK_SUCCESS);
@@ -447,6 +458,79 @@ int WINAPI WinMain(
     VkPipeline graphicsPipeline;
     assert(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, 0, &graphicsPipeline) == VK_SUCCESS);
 
+    VkFramebuffer* swapChainFramebuffers = malloc(sizeof(VkFramebuffer) * imageCount);
+    for (u32 index = 0; index < imageCount; index++) {
+        VkImageView attachments[] = { swapChainImageViews[index] };
+        VkFramebufferCreateInfo framebufferInfo;
+        zero(framebufferInfo);
+        framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        framebufferInfo.renderPass = renderPass;
+        framebufferInfo.attachmentCount = 1;
+        framebufferInfo.pAttachments = attachments;
+        framebufferInfo.width = surfaceCapabilities.currentExtent.width;
+        framebufferInfo.height = surfaceCapabilities.currentExtent.height;
+        framebufferInfo.layers = 1;
+        VkResult result = vkCreateFramebuffer(device, &framebufferInfo, 0, swapChainFramebuffers + index);
+        assert(result == VK_SUCCESS);
+    }
+
+    VkCommandPool commandPool;
+    VkCommandPoolCreateInfo poolInfo;
+    zero(poolInfo);
+    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    poolInfo.queueFamilyIndex = graphicsQueueFamilyIndex;
+    poolInfo.flags = 0;
+    assert(vkCreateCommandPool(device, &poolInfo, 0, &commandPool) == VK_SUCCESS);
+
+    VkCommandBuffer* commandBuffers = malloc(sizeof(VkCommandBuffer) * imageCount);
+    VkCommandBufferAllocateInfo allocInfo;
+    zero(allocInfo);
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.commandPool = commandPool;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandBufferCount = imageCount;
+    assert(vkAllocateCommandBuffers(device, &allocInfo, commandBuffers) == VK_SUCCESS);
+
+    for (size_t index = 0; index < imageCount; index++) {
+        VkCommandBufferBeginInfo beginInfo;
+        zero(beginInfo);
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        beginInfo.flags = 0;
+        beginInfo.pInheritanceInfo = 0;
+        assert(vkBeginCommandBuffer(commandBuffers[index], &beginInfo) == VK_SUCCESS);
+
+        VkRenderPassBeginInfo renderPassInfo;
+        zero(renderPassInfo);
+        renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        renderPassInfo.renderPass = renderPass;
+        renderPassInfo.framebuffer = swapChainFramebuffers[index];
+        renderPassInfo.renderArea.offset.x = 0;
+        renderPassInfo.renderArea.offset.y = 0;
+        renderPassInfo.renderArea.extent = surfaceCapabilities.currentExtent;
+
+        VkClearValue clearColor = { {{0.01f, 0.01f, 0.01f, 1.0f}} };
+        renderPassInfo.clearValueCount = 1;
+        renderPassInfo.pClearValues = &clearColor;
+
+        vkCmdBeginRenderPass(commandBuffers[index], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+        vkCmdBindPipeline(commandBuffers[index], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+
+        vkCmdDraw(commandBuffers[index], 3, 1, 0, 0);
+
+        vkCmdEndRenderPass(commandBuffers[index]);
+
+        assert(vkEndCommandBuffer(commandBuffers[index]) == VK_SUCCESS);
+    }
+
+    VkSemaphore imageAvailableSemaphore;
+    VkSemaphore renderFinishedSemaphore;
+    VkSemaphoreCreateInfo semaphoreInfo;
+    zero(semaphoreInfo);
+    semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    assert(vkCreateSemaphore(device, &semaphoreInfo, 0, &imageAvailableSemaphore) == VK_SUCCESS);
+    assert(vkCreateSemaphore(device, &semaphoreInfo, 0, &renderFinishedSemaphore) == VK_SUCCESS);
+
     //
     //
     //
@@ -460,7 +544,41 @@ int WINAPI WinMain(
             TranslateMessage(&message);
             DispatchMessageW(&message);
         }
+
+        u32 imageIndex;
+        vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+
+        VkSubmitInfo submitInfo;
+        zero(submitInfo);
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+
+        VkSemaphore waitSemaphores[] = { imageAvailableSemaphore };
+        VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
+        submitInfo.waitSemaphoreCount = 1;
+        submitInfo.pWaitSemaphores = waitSemaphores;
+        submitInfo.pWaitDstStageMask = waitStages;
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &commandBuffers[imageIndex];
+        VkSemaphore signalSemaphores[] = { renderFinishedSemaphore };
+        submitInfo.signalSemaphoreCount = 1;
+        submitInfo.pSignalSemaphores = signalSemaphores;
+        assert(vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE) == VK_SUCCESS);
+
+        VkPresentInfoKHR presentInfo;
+        zero(presentInfo);
+        presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+        presentInfo.waitSemaphoreCount = 1;
+        presentInfo.pWaitSemaphores = signalSemaphores;
+        VkSwapchainKHR swapChains[] = { swapChain };
+        presentInfo.swapchainCount = 1;
+        presentInfo.pSwapchains = swapChains;
+        presentInfo.pImageIndices = &imageIndex;
+        presentInfo.pResults = 0;
+        vkQueuePresentKHR(graphicsQueue, &presentInfo);
+        vkQueueWaitIdle(graphicsQueue);
     }
+
+    vkQueueWaitIdle(graphicsQueue);
 
     return 0;
 }
