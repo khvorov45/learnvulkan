@@ -61,31 +61,45 @@ int WINAPI WinMain(
     //
     //
 
-    VkApplicationInfo appInfo;
-    ZeroMemory(&appInfo, sizeof(VkApplicationInfo));
-    appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    appInfo.pApplicationName = "Hello Triangle";
-    appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
-    appInfo.pEngineName = "No Engine";
-    appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-    appInfo.apiVersion = VK_API_VERSION_1_0;
-
-    VkInstanceCreateInfo createInfo;
-    ZeroMemory(&createInfo, sizeof(VkInstanceCreateInfo));
-    createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-    createInfo.pApplicationInfo = &appInfo;
-    createInfo.enabledExtensionCount = 2;
-    char* extensionNames[2];
-    extensionNames[0] = VK_KHR_SURFACE_EXTENSION_NAME;
-    extensionNames[1] = VK_KHR_WIN32_SURFACE_EXTENSION_NAME;
-    createInfo.ppEnabledExtensionNames = extensionNames;
-    createInfo.enabledLayerCount = 1;
-    char* layerNames[1];
-    layerNames[0] = "VK_LAYER_KHRONOS_validation";
-    createInfo.ppEnabledLayerNames = layerNames;
-
     VkInstance vulkanInstance;
-    VkResult createInstanceResult = vkCreateInstance(&createInfo, 0, &vulkanInstance);
+    {
+        VkApplicationInfo appInfo;
+        ZeroMemory(&appInfo, sizeof(VkApplicationInfo));
+        appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+        appInfo.pApplicationName = "Hello Triangle";
+        appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
+        appInfo.pEngineName = "No Engine";
+        appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
+        appInfo.apiVersion = VK_API_VERSION_1_0;
+
+        VkInstanceCreateInfo createInfo;
+        ZeroMemory(&createInfo, sizeof(VkInstanceCreateInfo));
+        createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+        createInfo.pApplicationInfo = &appInfo;
+        createInfo.enabledExtensionCount = 2;
+        char* extensionNames[2];
+        extensionNames[0] = VK_KHR_SURFACE_EXTENSION_NAME;
+        extensionNames[1] = VK_KHR_WIN32_SURFACE_EXTENSION_NAME;
+        createInfo.ppEnabledExtensionNames = extensionNames;
+        createInfo.enabledLayerCount = 1;
+        char* layerNames[1];
+        layerNames[0] = "VK_LAYER_KHRONOS_validation";
+        createInfo.ppEnabledLayerNames = layerNames;
+
+        VkResult result = vkCreateInstance(&createInfo, 0, &vulkanInstance);
+        assert(result == VK_SUCCESS);
+    }
+
+    VkSurfaceKHR surface;
+    {
+        VkWin32SurfaceCreateInfoKHR createInfo;
+        ZeroMemory(&createInfo, sizeof(VkWin32SurfaceCreateInfoKHR));
+        createInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
+        createInfo.hwnd = window;
+        createInfo.hinstance = hInstance;
+        VkResult result = vkCreateWin32SurfaceKHR(vulkanInstance, &createInfo, 0, &surface);
+        assert(result == VK_SUCCESS);
+    }
 
     VkPhysicalDevice physicalDevice;
     u32 graphicsQueueFamilyIndex = 0;
@@ -100,6 +114,9 @@ int WINAPI WinMain(
         VkQueueFamilyProperties queueFamilyProperties;
         vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, &queueFamilyProperties);
         assert(queueFamilyProperties.queueFlags & VK_QUEUE_GRAPHICS_BIT);
+        b32 presentSupport = false;
+        vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice, graphicsQueueFamilyIndex, surface, &presentSupport);
+        assert(presentSupport);
     }
 
     VkDevice device;
