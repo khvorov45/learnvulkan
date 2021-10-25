@@ -1,5 +1,7 @@
 #include "stdint.h"
 
+#include "stdlib.h"
+
 #include "windows.h"
 
 #include "vulkan/vulkan.h"
@@ -7,6 +9,8 @@
 
 #define true 1
 #define false 0
+
+#define assert(expr) if (!(expr)) { *((int*)0) = 0; }
 
 typedef uint32_t u32;
 typedef int32_t i32;
@@ -83,16 +87,47 @@ int WINAPI WinMain(
     VkInstance vulkanInstance;
     VkResult createInstanceResult = vkCreateInstance(&createInfo, 0, &vulkanInstance);
 
-    uint32_t deviceCount = 1;
     VkPhysicalDevice physicalDevice;
-    VkResult enum_devices_result = vkEnumeratePhysicalDevices(vulkanInstance, &deviceCount, &physicalDevice);
-    VkPhysicalDeviceProperties deviceProperties;
-    vkGetPhysicalDeviceProperties(physicalDevice, &deviceProperties);
-    VkPhysicalDeviceFeatures deviceFeatures;
-    vkGetPhysicalDeviceFeatures(physicalDevice, &deviceFeatures);
-    uint32_t queueFamilyCount = 1;
-    VkQueueFamilyProperties queueFamilyProperties;
-    vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, &queueFamilyProperties);
+    u32 graphicsQueueFamilyIndex = 0;
+    {
+        uint32_t deviceCount = 1;
+        VkResult enum_devices_result = vkEnumeratePhysicalDevices(vulkanInstance, &deviceCount, &physicalDevice);
+        VkPhysicalDeviceProperties deviceProperties;
+        vkGetPhysicalDeviceProperties(physicalDevice, &deviceProperties);
+        VkPhysicalDeviceFeatures deviceFeatures;
+        vkGetPhysicalDeviceFeatures(physicalDevice, &deviceFeatures);
+        uint32_t queueFamilyCount = 1;
+        VkQueueFamilyProperties queueFamilyProperties;
+        vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, &queueFamilyProperties);
+        assert(queueFamilyProperties.queueFlags & VK_QUEUE_GRAPHICS_BIT);
+    }
+
+    VkDevice device;
+    {
+        VkDeviceQueueCreateInfo queueCreateInfo;
+        ZeroMemory(&queueCreateInfo, sizeof(VkDeviceQueueCreateInfo));
+        queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        queueCreateInfo.queueFamilyIndex = graphicsQueueFamilyIndex;
+        queueCreateInfo.queueCount = 1;
+        f32 queuePriority = 1.0f;
+        queueCreateInfo.pQueuePriorities = &queuePriority;
+
+        VkPhysicalDeviceFeatures deviceFeatures;
+        ZeroMemory(&deviceFeatures, sizeof(VkPhysicalDeviceFeatures));
+
+        VkDeviceCreateInfo createInfo;
+        ZeroMemory(&createInfo, sizeof(VkDeviceCreateInfo));
+        createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+        createInfo.pQueueCreateInfos = &queueCreateInfo;
+        createInfo.queueCreateInfoCount = 1;
+        createInfo.pEnabledFeatures = &deviceFeatures;
+
+        VkResult result = vkCreateDevice(physicalDevice, &createInfo, 0, &device);
+        assert(result == VK_SUCCESS);
+    }
+
+    VkQueue graphicsQueue;
+    vkGetDeviceQueue(device, graphicsQueueFamilyIndex, 0, &graphicsQueue);;
 
     //
     //
