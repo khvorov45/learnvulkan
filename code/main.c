@@ -1,6 +1,7 @@
 #include "stdint.h"
 
 #include "stdlib.h"
+#include "string.h"
 
 #include "windows.h"
 
@@ -103,6 +104,9 @@ int WINAPI WinMain(
 
     VkPhysicalDevice physicalDevice;
     u32 graphicsQueueFamilyIndex = 0;
+    VkSurfaceFormatKHR surfaceFormat;
+    VkPresentModeKHR presentMode;
+    VkSurfaceCapabilitiesKHR surfaceCapabilities;
     {
         uint32_t deviceCount = 1;
         VkResult enum_devices_result = vkEnumeratePhysicalDevices(vulkanInstance, &deviceCount, &physicalDevice);
@@ -117,6 +121,55 @@ int WINAPI WinMain(
         b32 presentSupport = false;
         vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice, graphicsQueueFamilyIndex, surface, &presentSupport);
         assert(presentSupport);
+
+        b32 swapChainSupported = false;
+        u32 extensionCount;
+        vkEnumerateDeviceExtensionProperties(physicalDevice, 0, &extensionCount, 0);
+        VkExtensionProperties* extensions = malloc(extensionCount * sizeof(VkExtensionProperties));
+        for (u32 extensionIndex = 0; extensionIndex < extensionCount; ++extensionIndex) {
+            VkExtensionProperties* extension = extensions + extensionIndex;
+            if (strcmp(extension->extensionName, VK_KHR_SWAPCHAIN_EXTENSION_NAME)) {
+                swapChainSupported = true;
+                break;
+            }
+        }
+        assert(swapChainSupported);
+        free(extensions);
+
+        vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, &surfaceCapabilities);
+        assert(surfaceCapabilities.currentExtent.width != UINT32_MAX);
+
+        u32 formatCount = 0;
+        vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount, 0);
+        VkSurfaceFormatKHR* formats = malloc(formatCount * sizeof(VkSurfaceFormatKHR));
+        vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount, formats);
+        assert(formatCount > 0);
+        b32 formatFound = false;
+        for (u32 formatIndex = 0; formatIndex < formatCount; formatIndex++) {
+            VkSurfaceFormatKHR format = formats[formatIndex];
+            if (format.format == VK_FORMAT_B8G8R8A8_SRGB && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+                surfaceFormat = format;
+                formatFound = true;
+                break;
+            }
+        }
+        assert(formatFound);
+
+        u32 presentModeCount = 0;
+        vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount, 0);
+        VkPresentModeKHR* presentModes = malloc(presentModeCount * sizeof(VkPresentModeKHR));
+        vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount, presentModes);
+        assert(presentModeCount > 0);
+        b32 presentModeFound = false;
+        for (u32 presentModeIndex = 0; presentModeIndex < presentModeCount; presentModeIndex++) {
+            VkPresentModeKHR thisPresentMode = presentModes[presentModeIndex];
+            if (thisPresentMode == VK_PRESENT_MODE_MAILBOX_KHR) {
+                presentMode = thisPresentMode;
+                presentModeFound = true;
+                break;
+            }
+        }
+        assert(presentModeFound);
     }
 
     VkDevice device;
@@ -138,13 +191,43 @@ int WINAPI WinMain(
         createInfo.pQueueCreateInfos = &queueCreateInfo;
         createInfo.queueCreateInfoCount = 1;
         createInfo.pEnabledFeatures = &deviceFeatures;
+        createInfo.enabledExtensionCount = 1;
+        char* extensions[1];
+        extensions[0] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+        createInfo.ppEnabledExtensionNames = extensions;
 
         VkResult result = vkCreateDevice(physicalDevice, &createInfo, 0, &device);
         assert(result == VK_SUCCESS);
     }
 
     VkQueue graphicsQueue;
-    vkGetDeviceQueue(device, graphicsQueueFamilyIndex, 0, &graphicsQueue);;
+    vkGetDeviceQueue(device, graphicsQueueFamilyIndex, 0, &graphicsQueue);
+
+    VkSwapchainKHR swapChain;
+    {
+        u32 imageCount = surfaceCapabilities.minImageCount + 1;
+        assert(imageCount <= surfaceCapabilities.maxImageCount);
+
+        VkSwapchainCreateInfoKHR createInfo;
+        ZeroMemory(&createInfo, sizeof(VkSwapchainCreateInfoKHR));
+        createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+        createInfo.surface = surface;
+        createInfo.minImageCount = imageCount;
+        createInfo.imageFormat = surfaceFormat.format;
+        createInfo.imageColorSpace = surfaceFormat.colorSpace;
+        createInfo.imageExtent = surfaceCapabilities.currentExtent;
+        createInfo.imageArrayLayers = 1;
+        createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        createInfo.preTransform = surfaceCapabilities.currentTransform;
+        createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+        createInfo.presentMode = presentMode;
+        createInfo.clipped = VK_TRUE;
+        createInfo.oldSwapchain = VK_NULL_HANDLE;
+
+        VkResult result = vkCreateSwapchainKHR(device, &createInfo, 0, &swapChain);
+        assert(result == VK_SUCCESS);
+    }
 
     //
     //
