@@ -83,6 +83,15 @@ int WINAPI WinMain(
     VkInstance vulkanInstance;
     VkResult createInstanceResult = vkCreateInstance(&createInfo, 0, &vulkanInstance);
 
+    uint32_t deviceCount = 1;
+    VkPhysicalDevice physicalDevice;
+    VkResult enum_devices_result = vkEnumeratePhysicalDevices(vulkanInstance, &deviceCount, &physicalDevice);
+
+    VkPhysicalDeviceProperties deviceProperties;
+    vkGetPhysicalDeviceProperties(physicalDevice, &deviceProperties);
+    VkPhysicalDeviceFeatures deviceFeatures;
+    vkGetPhysicalDeviceFeatures(physicalDevice, &deviceFeatures);
+
     //
     //
     //
