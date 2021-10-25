@@ -40,7 +40,9 @@ createShaderModule(char* filename, VkDevice device) {
     fseek(file, 0, SEEK_END);
     i32 fileSize = ftell(file);
     void* contents = malloc(fileSize);
-    fread(contents, fileSize, 1, file);
+    fseek(file, 0, SEEK_SET);
+    u32 read = fread(contents, fileSize, 1, file);
+    assert(read == 1);
     fclose(file);
     VkShaderModuleCreateInfo createInfo;
     ZeroMemory(&createInfo, sizeof(VkShaderModuleCreateInfo));
@@ -330,7 +332,6 @@ int WINAPI WinMain(
     zero(scissor);
     scissor.extent = surfaceCapabilities.currentExtent;
 
-
     VkPipelineViewportStateCreateInfo viewportState;
     zero(viewportState);
     viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
@@ -389,6 +390,62 @@ int WINAPI WinMain(
         VkResult result = vkCreatePipelineLayout(device, &pipelineLayoutInfo, 0, &pipelineLayout);
         assert(result == VK_SUCCESS);
     }
+
+    VkAttachmentDescription colorAttachment;
+    zero(colorAttachment);
+    colorAttachment.format = surfaceFormat.format;
+    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+    VkAttachmentReference colorAttachmentRef;
+    zero(colorAttachmentRef);
+    colorAttachmentRef.attachment = 0;
+    colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription subpass;
+    zero(subpass);
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorAttachmentRef;
+
+    VkRenderPass renderPass;
+    {
+        VkRenderPassCreateInfo renderPassInfo;
+        zero(renderPassInfo);
+        renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        renderPassInfo.attachmentCount = 1;
+        renderPassInfo.pAttachments = &colorAttachment;
+        renderPassInfo.subpassCount = 1;
+        renderPassInfo.pSubpasses = &subpass;
+
+        VkResult result = vkCreateRenderPass(device, &renderPassInfo, 0, &renderPass);
+        assert(result == VK_SUCCESS);
+    }
+
+    VkGraphicsPipelineCreateInfo pipelineInfo;
+    zero(pipelineInfo);
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = shaderStages;
+    pipelineInfo.pVertexInputState = &vertexInputInfo;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.layout = pipelineLayout;
+    pipelineInfo.renderPass = renderPass;
+    pipelineInfo.subpass = 0;
+    pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
+    pipelineInfo.basePipelineIndex = -1;
+
+    VkPipeline graphicsPipeline;
+    assert(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, 0, &graphicsPipeline) == VK_SUCCESS);
 
     //
     //
