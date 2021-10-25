@@ -9,6 +9,7 @@
     "lpfn",
     "LPSTR",
     "LPWSTR",
+    "LRESULT",
     "VREDRAW",
     "WNDCLASSEX",
     "WNDCLASSEXW"

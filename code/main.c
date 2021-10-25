@@ -20,6 +20,18 @@ typedef intptr_t isize;
 typedef int32_t b32;
 typedef float f32;
 
+static globalRunning = true;
+
+LRESULT windowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+    case WM_CLOSE: case WM_DESTROY: case WM_QUIT: {
+        globalRunning = false;
+    } break;
+    }
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
+}
+
+
 int WINAPI WinMain(
     HINSTANCE hInstance,
     HINSTANCE hPrevInstance,
@@ -32,7 +44,7 @@ int WINAPI WinMain(
     ZeroMemory(&windowClass, sizeof(WNDCLASSEXW));
     windowClass.cbSize = sizeof(WNDCLASSEX);
     windowClass.style = CS_HREDRAW | CS_VREDRAW;
-    windowClass.lpfnWndProc = DefWindowProcW;
+    windowClass.lpfnWndProc = windowProc;
     windowClass.hInstance = hInstance;
     windowClass.hCursor = LoadCursorW(0, (LPWSTR)IDC_ARROW);;
     windowClass.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
@@ -262,7 +274,7 @@ int WINAPI WinMain(
     ShowWindow(window, SW_SHOWMINIMIZED);
     ShowWindow(window, SW_SHOWNORMAL);
 
-    for (;;) {
+    while (globalRunning) {
         MSG message;
         while (PeekMessageW(&message, window, 0, 0, PM_REMOVE)) {
             TranslateMessage(&message);
