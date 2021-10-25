@@ -2,6 +2,7 @@
 
 #include "stdlib.h"
 #include "string.h"
+#include "stdio.h"
 
 #include "windows.h"
 
@@ -12,6 +13,8 @@
 #define false 0
 
 #define assert(expr) if (!(expr)) { *((int*)0) = 0; }
+
+#define zero(x) ZeroMemory(&x, sizeof(x))
 
 typedef uint32_t u32;
 typedef int32_t i32;
@@ -31,6 +34,24 @@ LRESULT windowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     return DefWindowProcW(hWnd, msg, wParam, lParam);
 }
 
+VkShaderModule
+createShaderModule(char* filename, VkDevice device) {
+    FILE* file = fopen(filename, "rb");
+    fseek(file, 0, SEEK_END);
+    i32 fileSize = ftell(file);
+    void* contents = malloc(fileSize);
+    fread(contents, fileSize, 1, file);
+    fclose(file);
+    VkShaderModuleCreateInfo createInfo;
+    ZeroMemory(&createInfo, sizeof(VkShaderModuleCreateInfo));
+    createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    createInfo.codeSize = fileSize;
+    createInfo.pCode = (u32*)(contents);
+    VkShaderModule shaderModule;
+    VkResult result = vkCreateShaderModule(device, &createInfo, 0, &shaderModule);
+    assert(result == VK_SUCCESS);
+    return shaderModule;
+}
 
 int WINAPI WinMain(
     HINSTANCE hInstance,
@@ -264,6 +285,108 @@ int WINAPI WinMain(
         createInfo.subresourceRange.layerCount = 1;
 
         VkResult result = vkCreateImageView(device, &createInfo, 0, swapChainImageViews + imageIndex);
+        assert(result == VK_SUCCESS);
+    }
+
+    VkShaderModule vertShaderModule = createShaderModule("build/vert.spv", device);
+    VkShaderModule fragShaderModule = createShaderModule("build/frag.spv", device);
+
+    VkPipelineShaderStageCreateInfo vertShaderStageInfo;
+    zero(vertShaderStageInfo);
+    vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    vertShaderStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    vertShaderStageInfo.module = vertShaderModule;
+    vertShaderStageInfo.pName = "main";
+
+    VkPipelineShaderStageCreateInfo fragShaderStageInfo;
+    zero(fragShaderStageInfo);
+    fragShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    fragShaderStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    fragShaderStageInfo.module = fragShaderModule;
+    fragShaderStageInfo.pName = "main";
+
+    VkPipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageInfo, fragShaderStageInfo };
+
+    VkPipelineVertexInputStateCreateInfo vertexInputInfo;
+    zero(vertexInputInfo);
+    vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly;
+    zero(inputAssembly);
+    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    inputAssembly.primitiveRestartEnable = VK_FALSE;
+
+    VkViewport viewport;
+    zero(viewport);
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = (f32)surfaceCapabilities.currentExtent.width;
+    viewport.height = (f32)surfaceCapabilities.currentExtent.height;
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+
+    VkRect2D scissor;
+    zero(scissor);
+    scissor.extent = surfaceCapabilities.currentExtent;
+
+
+    VkPipelineViewportStateCreateInfo viewportState;
+    zero(viewportState);
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.pViewports = &viewport;
+    viewportState.scissorCount = 1;
+    viewportState.pScissors = &scissor;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer;
+    zero(rasterizer);
+    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.depthClampEnable = VK_FALSE;
+    rasterizer.rasterizerDiscardEnable = VK_FALSE;
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.lineWidth = 1.0f;
+    rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+    rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    rasterizer.depthBiasEnable = VK_FALSE;
+
+    VkPipelineMultisampleStateCreateInfo multisampling;
+    zero(multisampling);
+    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.sampleShadingEnable = VK_FALSE;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineColorBlendAttachmentState colorBlendAttachment;
+    zero(colorBlendAttachment);
+    colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    colorBlendAttachment.blendEnable = VK_FALSE;
+
+    VkPipelineColorBlendStateCreateInfo colorBlending;
+    zero(colorBlending);
+    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlending.logicOpEnable = VK_FALSE;
+    colorBlending.logicOp = VK_LOGIC_OP_COPY; // Optional
+    colorBlending.attachmentCount = 1;
+    colorBlending.pAttachments = &colorBlendAttachment;
+
+    VkDynamicState dynamicStates[] = {
+        VK_DYNAMIC_STATE_VIEWPORT,
+        VK_DYNAMIC_STATE_LINE_WIDTH
+    };
+
+    VkPipelineDynamicStateCreateInfo dynamicState;
+    zero(dynamicState);
+    dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicState.dynamicStateCount = 2;
+    dynamicState.pDynamicStates = dynamicStates;
+
+    VkPipelineLayout pipelineLayout;
+    {
+        VkPipelineLayoutCreateInfo pipelineLayoutInfo;
+        zero(pipelineLayoutInfo);
+        pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+
+        VkResult result = vkCreatePipelineLayout(device, &pipelineLayoutInfo, 0, &pipelineLayout);
         assert(result == VK_SUCCESS);
     }
 
