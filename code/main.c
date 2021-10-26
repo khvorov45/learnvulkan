@@ -523,13 +523,26 @@ int WINAPI WinMain(
         assert(vkEndCommandBuffer(commandBuffers[index]) == VK_SUCCESS);
     }
 
-    VkSemaphore imageAvailableSemaphore;
-    VkSemaphore renderFinishedSemaphore;
+#define MAX_FRAMES_IN_FLIGHT 2
+    VkSemaphore imageAvailableSemaphores[MAX_FRAMES_IN_FLIGHT];
+    VkSemaphore renderFinishedSemaphores[MAX_FRAMES_IN_FLIGHT];
+    VkFence inFlightFences[MAX_FRAMES_IN_FLIGHT];
+    VkFence* imagesInFlight = malloc(sizeof(VkFence) * imageCount);
     VkSemaphoreCreateInfo semaphoreInfo;
     zero(semaphoreInfo);
     semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-    assert(vkCreateSemaphore(device, &semaphoreInfo, 0, &imageAvailableSemaphore) == VK_SUCCESS);
-    assert(vkCreateSemaphore(device, &semaphoreInfo, 0, &renderFinishedSemaphore) == VK_SUCCESS);
+    VkFenceCreateInfo fenceInfo;
+    zero(fenceInfo);
+    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+    for (u32 index = 0; index < MAX_FRAMES_IN_FLIGHT; index++) {
+        assert(vkCreateSemaphore(device, &semaphoreInfo, 0, imageAvailableSemaphores + index) == VK_SUCCESS);
+        assert(vkCreateSemaphore(device, &semaphoreInfo, 0, renderFinishedSemaphores + index) == VK_SUCCESS);
+        assert(vkCreateFence(device, &fenceInfo, 0, inFlightFences + index) == VK_SUCCESS);
+    }
+    for (u32 index = 0; index < imageCount; ++index) {
+        imagesInFlight[index] = VK_NULL_HANDLE;
+    }
 
     //
     //
@@ -538,6 +551,8 @@ int WINAPI WinMain(
     ShowWindow(window, SW_SHOWMINIMIZED);
     ShowWindow(window, SW_SHOWNORMAL);
 
+    u32 currentFrame = 0;
+
     while (globalRunning) {
         MSG message;
         while (PeekMessageW(&message, window, 0, 0, PM_REMOVE)) {
@@ -545,24 +560,32 @@ int WINAPI WinMain(
             DispatchMessageW(&message);
         }
 
+        vkWaitForFences(device, 1, inFlightFences + currentFrame, VK_TRUE, UINT64_MAX);
+
         u32 imageIndex;
-        vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+        vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+
+        if (imagesInFlight[imageIndex] != VK_NULL_HANDLE) {
+            vkWaitForFences(device, 1, imagesInFlight + imageIndex, VK_TRUE, UINT64_MAX);
+        }
+        imagesInFlight[imageIndex] = inFlightFences[currentFrame];
 
         VkSubmitInfo submitInfo;
         zero(submitInfo);
         submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
-        VkSemaphore waitSemaphores[] = { imageAvailableSemaphore };
+        VkSemaphore waitSemaphores[] = { imageAvailableSemaphores[currentFrame] };
         VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
         submitInfo.waitSemaphoreCount = 1;
         submitInfo.pWaitSemaphores = waitSemaphores;
         submitInfo.pWaitDstStageMask = waitStages;
         submitInfo.commandBufferCount = 1;
         submitInfo.pCommandBuffers = &commandBuffers[imageIndex];
-        VkSemaphore signalSemaphores[] = { renderFinishedSemaphore };
+        VkSemaphore signalSemaphores[] = { renderFinishedSemaphores[currentFrame] };
         submitInfo.signalSemaphoreCount = 1;
         submitInfo.pSignalSemaphores = signalSemaphores;
-        assert(vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE) == VK_SUCCESS);
+        vkResetFences(device, 1, inFlightFences + currentFrame);
+        assert(vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]) == VK_SUCCESS);
 
         VkPresentInfoKHR presentInfo;
         zero(presentInfo);
@@ -575,7 +598,11 @@ int WINAPI WinMain(
         presentInfo.pImageIndices = &imageIndex;
         presentInfo.pResults = 0;
         vkQueuePresentKHR(graphicsQueue, &presentInfo);
-        vkQueueWaitIdle(graphicsQueue);
+
+        ++currentFrame;
+        if (currentFrame == MAX_FRAMES_IN_FLIGHT) {
+            currentFrame = 0;
+        }
     }
 
     vkQueueWaitIdle(graphicsQueue);
