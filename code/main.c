@@ -105,6 +105,7 @@ initSwapChain(
             }
         }
         assert(formatFound);
+        free(formats);
     }
 
     {
@@ -156,6 +157,7 @@ initSwapChain(
         VkResult result = vkCreateImageView(device, &createInfo, 0, swapChain->imageViews + imageIndex);
         assert(result == VK_SUCCESS);
     }
+    free(swapChainImages);
 
     VkViewport viewport;
     zero(viewport);
@@ -314,6 +316,9 @@ cleanupSwapChain(SwapChain* swapChain, VkDevice device, VkCommandPool commandPoo
         vkDestroyImageView(device, swapChain->imageViews[index], 0);
     }
     vkDestroySwapchainKHR(device, swapChain->swapChain, 0);
+    free(swapChain->imageViews);
+    free(swapChain->framebuffers);
+    free(swapChain->commandBuffers);
 }
 
 int WINAPI WinMain(
