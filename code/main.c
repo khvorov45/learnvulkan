@@ -27,6 +27,10 @@ typedef struct SwapChain {
     VkSwapchainKHR swapChain;
     u32 imageCount;
     VkCommandBuffer* commandBuffers;
+    VkFramebuffer* framebuffers;
+    VkPipeline graphicsPipeline;
+    VkRenderPass renderPass;
+    VkImageView* imageViews;
 } SwapChain;
 
 static globalRunning = true;
@@ -61,8 +65,9 @@ createShaderModule(char* filename, VkDevice device) {
     return shaderModule;
 }
 
-SwapChain
-createSwapChain(
+void
+initSwapChain(
+    SwapChain* swapChain,
     VkPhysicalDevice physicalDevice,
     VkDevice device,
     VkSurfaceKHR surface,
@@ -77,9 +82,7 @@ createSwapChain(
     u32 graphicsQueueFamilyIndex,
     VkCommandPool commandPool
 ) {
-
-    SwapChain swapChain;
-    zero(swapChain);
+    ZeroMemory(swapChain, sizeof(SwapChain));
 
     VkSurfaceFormatKHR surfaceFormat;
     VkSurfaceCapabilitiesKHR surfaceCapabilities;
@@ -105,14 +108,14 @@ createSwapChain(
     }
 
     {
-        swapChain.imageCount = surfaceCapabilities.minImageCount + 1;
-        assert(swapChain.imageCount <= surfaceCapabilities.maxImageCount);
+        swapChain->imageCount = surfaceCapabilities.minImageCount + 1;
+        assert(swapChain->imageCount <= surfaceCapabilities.maxImageCount);
 
         VkSwapchainCreateInfoKHR createInfo;
         ZeroMemory(&createInfo, sizeof(VkSwapchainCreateInfoKHR));
         createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
         createInfo.surface = surface;
-        createInfo.minImageCount = swapChain.imageCount;
+        createInfo.minImageCount = swapChain->imageCount;
         createInfo.imageFormat = surfaceFormat.format;
         createInfo.imageColorSpace = surfaceFormat.colorSpace;
         createInfo.imageExtent = surfaceCapabilities.currentExtent;
@@ -125,15 +128,15 @@ createSwapChain(
         createInfo.clipped = VK_TRUE;
         createInfo.oldSwapchain = VK_NULL_HANDLE;
 
-        VkResult result = vkCreateSwapchainKHR(device, &createInfo, 0, &swapChain.swapChain);
+        VkResult result = vkCreateSwapchainKHR(device, &createInfo, 0, &swapChain->swapChain);
         assert(result == VK_SUCCESS);
     }
 
-    vkGetSwapchainImagesKHR(device, swapChain.swapChain, &swapChain.imageCount, 0);
-    VkImage* swapChainImages = malloc(sizeof(VkImage) * swapChain.imageCount);
-    vkGetSwapchainImagesKHR(device, swapChain.swapChain, &swapChain.imageCount, swapChainImages);
-    VkImageView* swapChainImageViews = malloc(sizeof(VkImageView) * swapChain.imageCount);
-    for (u32 imageIndex = 0; imageIndex < swapChain.imageCount; ++imageIndex) {
+    vkGetSwapchainImagesKHR(device, swapChain->swapChain, &swapChain->imageCount, 0);
+    VkImage* swapChainImages = malloc(sizeof(VkImage) * swapChain->imageCount);
+    vkGetSwapchainImagesKHR(device, swapChain->swapChain, &swapChain->imageCount, swapChainImages);
+    swapChain->imageViews = malloc(sizeof(VkImageView) * swapChain->imageCount);
+    for (u32 imageIndex = 0; imageIndex < swapChain->imageCount; ++imageIndex) {
         VkImageViewCreateInfo createInfo;
         ZeroMemory(&createInfo, sizeof(VkImageViewCreateInfo));
         createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -150,7 +153,7 @@ createSwapChain(
         createInfo.subresourceRange.baseArrayLayer = 0;
         createInfo.subresourceRange.layerCount = 1;
 
-        VkResult result = vkCreateImageView(device, &createInfo, 0, swapChainImageViews + imageIndex);
+        VkResult result = vkCreateImageView(device, &createInfo, 0, swapChain->imageViews + imageIndex);
         assert(result == VK_SUCCESS);
     }
 
@@ -197,7 +200,6 @@ createSwapChain(
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &colorAttachmentRef;
 
-    VkRenderPass renderPass;
     {
         VkSubpassDependency dependency;
         zero(dependency);
@@ -218,7 +220,7 @@ createSwapChain(
         renderPassInfo.dependencyCount = 1;
         renderPassInfo.pDependencies = &dependency;
 
-        VkResult result = vkCreateRenderPass(device, &renderPassInfo, 0, &renderPass);
+        VkResult result = vkCreateRenderPass(device, &renderPassInfo, 0, &swapChain->renderPass);
         assert(result == VK_SUCCESS);
     }
 
@@ -234,52 +236,51 @@ createSwapChain(
     pipelineInfo.pMultisampleState = multisampling;
     pipelineInfo.pColorBlendState = colorBlending;
     pipelineInfo.layout = pipelineLayout;
-    pipelineInfo.renderPass = renderPass;
+    pipelineInfo.renderPass = swapChain->renderPass;
     pipelineInfo.subpass = 0;
     pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
     pipelineInfo.basePipelineIndex = -1;
 
-    VkPipeline graphicsPipeline;
-    assert(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, 0, &graphicsPipeline) == VK_SUCCESS);
+    assert(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, 0, &swapChain->graphicsPipeline) == VK_SUCCESS);
 
-    VkFramebuffer* swapChainFramebuffers = malloc(sizeof(VkFramebuffer) * swapChain.imageCount);
-    for (u32 index = 0; index < swapChain.imageCount; index++) {
-        VkImageView attachments[] = { swapChainImageViews[index] };
+    swapChain->framebuffers = malloc(sizeof(VkFramebuffer) * swapChain->imageCount);
+    for (u32 index = 0; index < swapChain->imageCount; index++) {
+        VkImageView attachments[] = { swapChain->imageViews[index] };
         VkFramebufferCreateInfo framebufferInfo;
         zero(framebufferInfo);
         framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        framebufferInfo.renderPass = renderPass;
+        framebufferInfo.renderPass = swapChain->renderPass;
         framebufferInfo.attachmentCount = 1;
         framebufferInfo.pAttachments = attachments;
         framebufferInfo.width = surfaceCapabilities.currentExtent.width;
         framebufferInfo.height = surfaceCapabilities.currentExtent.height;
         framebufferInfo.layers = 1;
-        VkResult result = vkCreateFramebuffer(device, &framebufferInfo, 0, swapChainFramebuffers + index);
+        VkResult result = vkCreateFramebuffer(device, &framebufferInfo, 0, swapChain->framebuffers + index);
         assert(result == VK_SUCCESS);
     }
 
-    swapChain.commandBuffers = malloc(sizeof(VkCommandBuffer) * swapChain.imageCount);
+    swapChain->commandBuffers = malloc(sizeof(VkCommandBuffer) * swapChain->imageCount);
     VkCommandBufferAllocateInfo allocInfo;
     zero(allocInfo);
     allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     allocInfo.commandPool = commandPool;
     allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    allocInfo.commandBufferCount = swapChain.imageCount;
-    assert(vkAllocateCommandBuffers(device, &allocInfo, swapChain.commandBuffers) == VK_SUCCESS);
+    allocInfo.commandBufferCount = swapChain->imageCount;
+    assert(vkAllocateCommandBuffers(device, &allocInfo, swapChain->commandBuffers) == VK_SUCCESS);
 
-    for (size_t index = 0; index < swapChain.imageCount; index++) {
+    for (size_t index = 0; index < swapChain->imageCount; index++) {
         VkCommandBufferBeginInfo beginInfo;
         zero(beginInfo);
         beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         beginInfo.flags = 0;
         beginInfo.pInheritanceInfo = 0;
-        assert(vkBeginCommandBuffer(swapChain.commandBuffers[index], &beginInfo) == VK_SUCCESS);
+        assert(vkBeginCommandBuffer(swapChain->commandBuffers[index], &beginInfo) == VK_SUCCESS);
 
         VkRenderPassBeginInfo renderPassInfo;
         zero(renderPassInfo);
         renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-        renderPassInfo.renderPass = renderPass;
-        renderPassInfo.framebuffer = swapChainFramebuffers[index];
+        renderPassInfo.renderPass = swapChain->renderPass;
+        renderPassInfo.framebuffer = swapChain->framebuffers[index];
         renderPassInfo.renderArea.offset.x = 0;
         renderPassInfo.renderArea.offset.y = 0;
         renderPassInfo.renderArea.extent = surfaceCapabilities.currentExtent;
@@ -288,18 +289,31 @@ createSwapChain(
         renderPassInfo.clearValueCount = 1;
         renderPassInfo.pClearValues = &clearColor;
 
-        vkCmdBeginRenderPass(swapChain.commandBuffers[index], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBeginRenderPass(swapChain->commandBuffers[index], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-        vkCmdBindPipeline(swapChain.commandBuffers[index], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+        vkCmdBindPipeline(swapChain->commandBuffers[index], VK_PIPELINE_BIND_POINT_GRAPHICS, swapChain->graphicsPipeline);
 
-        vkCmdDraw(swapChain.commandBuffers[index], 3, 1, 0, 0);
+        vkCmdDraw(swapChain->commandBuffers[index], 3, 1, 0, 0);
 
-        vkCmdEndRenderPass(swapChain.commandBuffers[index]);
+        vkCmdEndRenderPass(swapChain->commandBuffers[index]);
 
-        assert(vkEndCommandBuffer(swapChain.commandBuffers[index]) == VK_SUCCESS);
+        assert(vkEndCommandBuffer(swapChain->commandBuffers[index]) == VK_SUCCESS);
     }
+}
 
-    return swapChain;
+void
+cleanupSwapChain(SwapChain* swapChain, VkDevice device, VkCommandPool commandPool) {
+    vkDeviceWaitIdle(device);
+    for (size_t index = 0; index < swapChain->imageCount; index++) {
+        vkDestroyFramebuffer(device, swapChain->framebuffers[index], 0);
+    }
+    vkFreeCommandBuffers(device, commandPool, swapChain->imageCount, swapChain->commandBuffers);
+    vkDestroyPipeline(device, swapChain->graphicsPipeline, 0);
+    vkDestroyRenderPass(device, swapChain->renderPass, 0);
+    for (size_t index = 0; index < swapChain->imageCount; index++) {
+        vkDestroyImageView(device, swapChain->imageViews[index], 0);
+    }
+    vkDestroySwapchainKHR(device, swapChain->swapChain, 0);
 }
 
 int WINAPI WinMain(
@@ -552,7 +566,9 @@ int WINAPI WinMain(
         assert(result == VK_SUCCESS);
     }
 
-    SwapChain swapChain = createSwapChain(
+    SwapChain swapChain;
+    initSwapChain(
+        &swapChain,
         physicalDevice,
         device,
         surface,
@@ -608,7 +624,32 @@ int WINAPI WinMain(
         vkWaitForFences(device, 1, inFlightFences + currentFrame, VK_TRUE, UINT64_MAX);
 
         u32 imageIndex;
-        vkAcquireNextImageKHR(device, swapChain.swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+        {
+            VkResult result = vkAcquireNextImageKHR(
+                device, swapChain.swapChain, UINT64_MAX,
+                imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex
+            );
+            if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+                cleanupSwapChain(&swapChain, device, commandPool);
+                initSwapChain(
+                    &swapChain,
+                    physicalDevice,
+                    device,
+                    surface,
+                    presentMode,
+                    shaderStages,
+                    &vertexInputInfo,
+                    &inputAssembly,
+                    &rasterizer,
+                    &multisampling,
+                    &colorBlending,
+                    pipelineLayout,
+                    graphicsQueueFamilyIndex,
+                    commandPool
+                );
+                continue;
+            }
+        }
 
         if (imagesInFlight[imageIndex] != VK_NULL_HANDLE) {
             vkWaitForFences(device, 1, imagesInFlight + imageIndex, VK_TRUE, UINT64_MAX);
