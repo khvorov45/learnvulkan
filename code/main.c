@@ -40,6 +40,9 @@ LRESULT windowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_CLOSE: case WM_DESTROY: case WM_QUIT: {
         globalRunning = false;
     } break;
+    case WM_SIZE: {
+
+    } break;
     }
     return DefWindowProcW(hWnd, msg, wParam, lParam);
 }
@@ -321,7 +324,44 @@ cleanupSwapChain(SwapChain* swapChain, VkDevice device, VkCommandPool commandPoo
     free(swapChain->commandBuffers);
 }
 
-int WINAPI WinMain(
+void
+recreateSwapChain(
+    SwapChain* swapChain,
+    VkPhysicalDevice physicalDevice,
+    VkDevice device,
+    VkSurfaceKHR surface,
+    VkPresentModeKHR presentMode,
+    VkPipelineShaderStageCreateInfo* shaderStages,
+    VkPipelineVertexInputStateCreateInfo* vertexInputInfo,
+    VkPipelineInputAssemblyStateCreateInfo* inputAssembly,
+    VkPipelineRasterizationStateCreateInfo* rasterizer,
+    VkPipelineMultisampleStateCreateInfo* multisampling,
+    VkPipelineColorBlendStateCreateInfo* colorBlending,
+    VkPipelineLayout pipelineLayout,
+    u32 graphicsQueueFamilyIndex,
+    VkCommandPool commandPool
+) {
+    cleanupSwapChain(swapChain, device, commandPool);
+    initSwapChain(
+        swapChain,
+        physicalDevice,
+        device,
+        surface,
+        presentMode,
+        shaderStages,
+        vertexInputInfo,
+        inputAssembly,
+        rasterizer,
+        multisampling,
+        colorBlending,
+        pipelineLayout,
+        graphicsQueueFamilyIndex,
+        commandPool
+    );
+}
+
+int WINAPI
+WinMain(
     HINSTANCE hInstance,
     HINSTANCE hPrevInstance,
     LPSTR     lpCmdLine,
@@ -635,8 +675,7 @@ int WINAPI WinMain(
                 imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex
             );
             if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
-                cleanupSwapChain(&swapChain, device, commandPool);
-                initSwapChain(
+                recreateSwapChain(
                     &swapChain,
                     physicalDevice,
                     device,
