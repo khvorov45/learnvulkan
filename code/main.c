@@ -33,18 +33,43 @@ typedef struct SwapChain {
     VkImageView* imageViews;
 } SwapChain;
 
-static globalRunning = true;
+static b32 globalRunning = true;
+static void* globalMainFibre = 0;
+static void* globalPollEventsFibre = 0;
 
 LRESULT windowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_CLOSE: case WM_DESTROY: case WM_QUIT: {
         globalRunning = false;
     } break;
-    case WM_SIZE: {
-
+    case WM_ENTERSIZEMOVE:
+        SetTimer(hWnd, 0, 1, NULL);
+        break;
+    case WM_EXITSIZEMOVE:
+        KillTimer(hWnd, 0);
+        break;
+    case WM_TIMER:
+        SwitchToFiber(globalMainFibre);
+        break;
+    case WM_ERASEBKGND: {
+        return 1;
     } break;
     }
     return DefWindowProcW(hWnd, msg, wParam, lParam);
+}
+
+void
+pollEventsFiberCallback(void* lpParam) {
+    HWND window = *(HWND*)lpParam;
+    MSG msg;
+    for (;;) {
+        if (PeekMessageW(&msg, window, 0, 0, PM_REMOVE) != 0) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        } else {
+            SwitchToFiber(globalMainFibre);
+        }
+    }
 }
 
 VkShaderModule
@@ -71,6 +96,7 @@ createShaderModule(char* filename, VkDevice device) {
 void
 initSwapChain(
     SwapChain* swapChain,
+    VkSwapchainKHR oldSwapChain,
     VkPhysicalDevice physicalDevice,
     VkDevice device,
     VkSurfaceKHR surface,
@@ -130,7 +156,7 @@ initSwapChain(
         createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
         createInfo.presentMode = presentMode;
         createInfo.clipped = VK_TRUE;
-        createInfo.oldSwapchain = VK_NULL_HANDLE;
+        createInfo.oldSwapchain = oldSwapChain;
 
         VkResult result = vkCreateSwapchainKHR(device, &createInfo, 0, &swapChain->swapChain);
         assert(result == VK_SUCCESS);
@@ -322,42 +348,6 @@ cleanupSwapChain(SwapChain* swapChain, VkDevice device, VkCommandPool commandPoo
     free(swapChain->imageViews);
     free(swapChain->framebuffers);
     free(swapChain->commandBuffers);
-}
-
-void
-recreateSwapChain(
-    SwapChain* swapChain,
-    VkPhysicalDevice physicalDevice,
-    VkDevice device,
-    VkSurfaceKHR surface,
-    VkPresentModeKHR presentMode,
-    VkPipelineShaderStageCreateInfo* shaderStages,
-    VkPipelineVertexInputStateCreateInfo* vertexInputInfo,
-    VkPipelineInputAssemblyStateCreateInfo* inputAssembly,
-    VkPipelineRasterizationStateCreateInfo* rasterizer,
-    VkPipelineMultisampleStateCreateInfo* multisampling,
-    VkPipelineColorBlendStateCreateInfo* colorBlending,
-    VkPipelineLayout pipelineLayout,
-    u32 graphicsQueueFamilyIndex,
-    VkCommandPool commandPool
-) {
-    cleanupSwapChain(swapChain, device, commandPool);
-    initSwapChain(
-        swapChain,
-        physicalDevice,
-        device,
-        surface,
-        presentMode,
-        shaderStages,
-        vertexInputInfo,
-        inputAssembly,
-        rasterizer,
-        multisampling,
-        colorBlending,
-        pipelineLayout,
-        graphicsQueueFamilyIndex,
-        commandPool
-    );
 }
 
 int WINAPI
@@ -614,6 +604,7 @@ WinMain(
     SwapChain swapChain;
     initSwapChain(
         &swapChain,
+        VK_NULL_HANDLE,
         physicalDevice,
         device,
         surface,
@@ -659,12 +650,11 @@ WinMain(
 
     u32 currentFrame = 0;
 
+    globalMainFibre = ConvertThreadToFiber(0);
+    globalPollEventsFibre = CreateFiber(0, pollEventsFiberCallback, &window);
+
     while (globalRunning) {
-        MSG message;
-        while (PeekMessageW(&message, window, 0, 0, PM_REMOVE)) {
-            TranslateMessage(&message);
-            DispatchMessageW(&message);
-        }
+        SwitchToFiber(globalPollEventsFibre);
 
         vkWaitForFences(device, 1, inFlightFences + currentFrame, VK_TRUE, UINT64_MAX);
 
@@ -675,8 +665,10 @@ WinMain(
                 imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex
             );
             if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
-                recreateSwapChain(
+                SwapChain oldSwapChain = swapChain;
+                initSwapChain(
                     &swapChain,
+                    oldSwapChain.swapChain,
                     physicalDevice,
                     device,
                     surface,
@@ -691,7 +683,12 @@ WinMain(
                     graphicsQueueFamilyIndex,
                     commandPool
                 );
-                continue;
+                cleanupSwapChain(&oldSwapChain, device, commandPool);
+                result = vkAcquireNextImageKHR(
+                    device, swapChain.swapChain, UINT64_MAX,
+                    imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex
+                );
+                assert(result == VK_SUCCESS);
             }
         }
 

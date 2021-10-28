@@ -3,6 +3,7 @@
     "vulkan.h": "c"
   },
   "cSpell.words": [
+    "ERASEBKGND",
     "HBRUSH",
     "HREDRAW",
     "HWND",
