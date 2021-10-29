@@ -5,16 +5,19 @@
 #include "stdio.h"
 
 #include "windows.h"
+#include "windowsx.h"
 
 #include "vulkan/vulkan.h"
 #include "vulkan/vulkan_win32.h"
+
+#include "msg.c"
 
 #define true 1
 #define false 0
 
 #define assert(expr) if (!(expr)) { *((int*)0) = 0; }
-
 #define zero(x) ZeroMemory(&x, sizeof(x))
+#define arrayCount(arr) sizeof(arr) / sizeof(arr[0])
 
 typedef uint32_t u32;
 typedef int32_t i32;
@@ -37,39 +40,32 @@ static b32 globalRunning = true;
 static void* globalMainFibre = 0;
 static void* globalPollEventsFibre = 0;
 
+void
+printMsgName(u32 msg_code) {
+    char* name = findMsgName(msg_code);
+    if (name) {
+        char buffer[64];
+        snprintf(buffer, 64, "%s\n", name);
+        OutputDebugString(buffer);
+    } else {
+        OutputDebugString("MSG UNRECOGNIZED\n");
+    }
+}
+
 LRESULT windowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    printMsgName(msg);
     switch (msg) {
     case WM_CLOSE: case WM_DESTROY: case WM_QUIT: {
         globalRunning = false;
     } break;
-    case WM_ENTERSIZEMOVE:
-        SetTimer(hWnd, 0, 1, NULL);
-        break;
-    case WM_EXITSIZEMOVE:
-        KillTimer(hWnd, 0);
-        break;
-    case WM_TIMER:
-        SwitchToFiber(globalMainFibre);
-        break;
     case WM_ERASEBKGND: {
-        return 1;
+        return 1; // NOTE(sen) Prevents flickering
+    } break;
+    case WM_NCCALCSIZE: {
+        return 0; // NOTE(sen) Removes window decorations
     } break;
     }
     return DefWindowProcW(hWnd, msg, wParam, lParam);
-}
-
-void
-pollEventsFiberCallback(void* lpParam) {
-    HWND window = *(HWND*)lpParam;
-    MSG msg;
-    for (;;) {
-        if (PeekMessageW(&msg, window, 0, 0, PM_REMOVE) != 0) {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        } else {
-            SwitchToFiber(globalMainFibre);
-        }
-    }
 }
 
 VkShaderModule
@@ -645,16 +641,105 @@ WinMain(
     //
     //
 
-    ShowWindow(window, SW_SHOWMINIMIZED);
     ShowWindow(window, SW_SHOWNORMAL);
 
     u32 currentFrame = 0;
 
-    globalMainFibre = ConvertThreadToFiber(0);
-    globalPollEventsFibre = CreateFiber(0, pollEventsFiberCallback, &window);
+    TRACKMOUSEEVENT trackMouse;
+    trackMouse.cbSize = sizeof(TRACKMOUSEEVENT);
+    trackMouse.dwFlags = TME_LEAVE;
+    trackMouse.hwndTrack = window;
+    trackMouse.dwHoverTime = HOVER_DEFAULT;
 
+    i32 currentMouseX = -1;
+    i32 currentMouseY = -1;
+    i32 rightOfMouseWhenSizeStarted = 0;
+    i32 belowMouseWhenSizeStarted = 0;
+    b32 changeX = false;
+    b32 changeY = false;
+    i32 changeThreshold = 50;
+    b32 insideChangeX = false;
+    b32 insideChangeY = false;
+    HCURSOR cursorSizeWE = LoadCursorW(0, (LPWSTR)IDC_SIZEWE);
+    HCURSOR cursorSizeNS = LoadCursorW(0, (LPWSTR)IDC_SIZENS);
+    HCURSOR cursorSizeNWSE = LoadCursorW(0, (LPWSTR)IDC_SIZENWSE);
     while (globalRunning) {
-        SwitchToFiber(globalPollEventsFibre);
+
+        //
+        //
+        //
+
+        TrackMouseEvent(&trackMouse);
+        MSG msg;
+        while (PeekMessageW(&msg, window, 0, 0, PM_REMOVE) != 0) {
+            switch (msg.message) {
+            case WM_MOUSEMOVE: {
+                currentMouseX = GET_X_LPARAM(msg.lParam);
+                currentMouseY = GET_Y_LPARAM(msg.lParam);
+                insideChangeX = (currentMouseX < windowWidth) && (currentMouseX > windowWidth - changeThreshold);
+                insideChangeY = (currentMouseY < windowHeight) && (currentMouseY > windowHeight - changeThreshold);
+            } break;
+            case WM_LBUTTONDOWN: {
+                b32 setCapture = false;
+                if (insideChangeX) {
+                    changeX = true;
+                    rightOfMouseWhenSizeStarted = windowWidth - currentMouseX;
+                    setCapture = true;
+                } if (insideChangeY) {
+                    changeY = true;
+                    belowMouseWhenSizeStarted = windowHeight - currentMouseY;
+                    setCapture = true;
+                }
+                if (setCapture) {
+                    SetCapture(window);
+                }
+            } break;
+            case WM_LBUTTONUP: {
+                changeX = false;
+                changeY = false;
+                ClipCursor(0);
+                ReleaseCapture();
+            } break;
+            case WM_MOUSELEAVE: {
+                changeX = false;
+                changeY = false;
+                insideChangeX = false;
+                insideChangeY = false;
+            } break;
+            default: {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            } break;
+            }
+        }
+
+        if (insideChangeX && insideChangeY) {
+            SetCursor(cursorSizeNWSE);
+        } else if (insideChangeX) {
+            SetCursor(cursorSizeWE);
+        } else if (insideChangeY) {
+            SetCursor(cursorSizeNS);
+        } else {
+            SetCursor(windowClass.hCursor);
+        }
+
+        if (changeX || changeY) {
+            RECT currentRect;
+            GetWindowRect(window, &currentRect);
+            if (changeX) {
+                i32 newWindowWidth = currentMouseX + rightOfMouseWhenSizeStarted;
+                windowWidth = newWindowWidth;
+            }
+            if (changeY) {
+                i32 newWindowHeight = currentMouseY + belowMouseWhenSizeStarted;
+                windowHeight = newWindowHeight;
+            }
+            SetWindowPos(window, 0, currentRect.left, currentRect.top, windowWidth, windowHeight, 0);
+        }
+
+        //
+        //
+        //
 
         vkWaitForFences(device, 1, inFlightFences + currentFrame, VK_TRUE, UINT64_MAX);
 

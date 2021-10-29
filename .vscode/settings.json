@@ -1,17 +1,26 @@
 {
   "files.associations": {
-    "vulkan.h": "c"
+    "vulkan.h": "c",
+    "*.rh": "c",
+    "system_error": "c",
+    "xlocale": "c"
   },
   "cSpell.words": [
     "ERASEBKGND",
     "HBRUSH",
+    "HCURSOR",
     "HREDRAW",
     "HWND",
+    "LBUTTONDOWN",
+    "LBUTTONUP",
     "LPARAM",
     "lpfn",
     "LPSTR",
     "LPWSTR",
     "LRESULT",
+    "NCCALCSIZE",
+    "SIZENWSE",
+    "SIZEWE",
     "VREDRAW",
     "WNDCLASSEX",
     "WNDCLASSEXW"
