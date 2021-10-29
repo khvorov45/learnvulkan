@@ -368,6 +368,58 @@ cleanupSwapChain(SwapChain* swapChain, VkDevice device, VkCommandPool commandPoo
     free(swapChain->commandBuffers);
 }
 
+void
+createBuffer(
+    VkDevice device, VkPhysicalDevice physicalDevice,
+    VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties,
+    VkBuffer* buffer, VkDeviceMemory* bufferMemory
+) {
+    VkBufferCreateInfo bufferInfo;
+    zero(bufferInfo);
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = size;
+    bufferInfo.usage = usage;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    {
+        VkResult result = vkCreateBuffer(device, &bufferInfo, 0, buffer);
+        assert(result == VK_SUCCESS);
+    }
+
+    VkMemoryRequirements memRequirements;
+    vkGetBufferMemoryRequirements(device, *buffer, &memRequirements);
+
+    VkPhysicalDeviceMemoryProperties memProperties;
+    vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
+    i32 bufferMemIndex;
+    {
+        b32 found = false;
+        for (u32 index = 0; index < memProperties.memoryTypeCount; index++) {
+            b32 correctType = memRequirements.memoryTypeBits & (1 << index);
+            b32 correctProperties = (memProperties.memoryTypes[index].propertyFlags & properties) == properties;
+            if (correctType && correctProperties) {
+                found = true;
+                bufferMemIndex = index;
+                break;
+            }
+        }
+        assert(found);
+    }
+
+    VkMemoryAllocateInfo allocInfo;
+    zero(allocInfo);
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = bufferMemIndex;
+
+    {
+        VkResult result = vkAllocateMemory(device, &allocInfo, 0, bufferMemory);
+        assert(result == VK_SUCCESS);
+    }
+
+    assert(vkBindBufferMemory(device, *buffer, *bufferMemory, 0) == VK_SUCCESS);
+}
+
 int WINAPI
 WinMain(
     HINSTANCE hInstance,
@@ -597,60 +649,68 @@ WinMain(
     vertexInputInfo.vertexAttributeDescriptionCount = arrayCount(attDescriptions);
     vertexInputInfo.pVertexAttributeDescriptions = attDescriptions;
 
-    VkBufferCreateInfo bufferInfo;
-    zero(bufferInfo);
-    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufferInfo.size = sizeof(vertices);
-    bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    u32 vertexBufferSize = sizeof(vertices);
 
-    VkBuffer vertexBuffer;
-    {
-        VkResult result = vkCreateBuffer(device, &bufferInfo, 0, &vertexBuffer);
-        assert(result == VK_SUCCESS);
-    }
-
-    VkMemoryRequirements memRequirements;
-    vkGetBufferMemoryRequirements(device, vertexBuffer, &memRequirements);
-
-    VkPhysicalDeviceMemoryProperties memProperties;
-    vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
-    i32 vertexBufferMemIndex;
-    {
-        b32 found = false;
-        i32 properties = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-        for (u32 index = 0; index < memProperties.memoryTypeCount; index++) {
-            b32 correctType = memRequirements.memoryTypeBits & (1 << index);
-            b32 correctProperties = (memProperties.memoryTypes[index].propertyFlags & properties) == properties;
-            if (correctType && correctProperties) {
-                found = true;
-                vertexBufferMemIndex = index;
-                break;
-            }
-        }
-        assert(found);
-    }
-
-    VkMemoryAllocateInfo allocInfo;
-    zero(allocInfo);
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memRequirements.size;
-    allocInfo.memoryTypeIndex = vertexBufferMemIndex;
-
-    VkDeviceMemory vertexBufferMemory;
-    {
-        VkResult result = vkAllocateMemory(device, &allocInfo, 0, &vertexBufferMemory);
-        assert(result == VK_SUCCESS);
-    }
-
-    assert(vkBindBufferMemory(device, vertexBuffer, vertexBufferMemory, 0) == VK_SUCCESS);
-
+    VkBuffer stagingBuffer;
+    VkDeviceMemory stagingBufferMemory;
+    createBuffer(
+        device, physicalDevice, vertexBufferSize,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        &stagingBuffer, &stagingBufferMemory
+    );
     void* vertexGpuData;
     {
-        VkResult result = vkMapMemory(device, vertexBufferMemory, 0, bufferInfo.size, 0, &vertexGpuData);
+        VkResult result = vkMapMemory(device, stagingBufferMemory, 0, vertexBufferSize, 0, &vertexGpuData);
         assert(result == VK_SUCCESS);
     }
     CopyMemory(vertexGpuData, vertices, sizeof(vertices));
+
+    VkBuffer vertexBuffer;
+    VkDeviceMemory vertexBufferMemory;
+    createBuffer(
+        device, physicalDevice, vertexBufferSize,
+        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        &vertexBuffer, &vertexBufferMemory
+    );
+
+    // NOTE(sen) Copy from staging to vertex
+    {
+        VkCommandBufferAllocateInfo allocInfo;
+        zero(allocInfo);
+        allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocInfo.commandPool = commandPool;
+        allocInfo.commandBufferCount = 1;
+
+        VkCommandBuffer commandBuffer;
+        vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer);
+
+        VkCommandBufferBeginInfo beginInfo;
+        zero(beginInfo);
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+        vkBeginCommandBuffer(commandBuffer, &beginInfo);
+        VkBufferCopy copyRegion;
+        zero(copyRegion);
+        copyRegion.size = vertexBufferSize;
+        vkCmdCopyBuffer(commandBuffer, stagingBuffer, vertexBuffer, 1, &copyRegion);
+
+        vkEndCommandBuffer(commandBuffer);
+
+        VkSubmitInfo submitInfo;
+        zero(submitInfo);
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &commandBuffer;
+
+        vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+        vkQueueWaitIdle(graphicsQueue);
+
+        vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+    }
 
     VkPipelineInputAssemblyStateCreateInfo inputAssembly;
     zero(inputAssembly);
