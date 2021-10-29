@@ -53,7 +53,6 @@ printMsgName(u32 msg_code) {
 }
 
 LRESULT windowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    printMsgName(msg);
     switch (msg) {
     case WM_CLOSE: case WM_DESTROY: case WM_QUIT: {
         globalRunning = false;
@@ -663,11 +662,31 @@ WinMain(
     HCURSOR cursorSizeWE = LoadCursorW(0, (LPWSTR)IDC_SIZEWE);
     HCURSOR cursorSizeNS = LoadCursorW(0, (LPWSTR)IDC_SIZENS);
     HCURSOR cursorSizeNWSE = LoadCursorW(0, (LPWSTR)IDC_SIZENWSE);
+
+    b32 minimized = false;
     while (globalRunning) {
 
         //
         //
         //
+
+        while (minimized) {
+            MSG msg;
+            while (GetMessageW(&msg, window, 0, 0) && minimized) {
+                switch (msg.message) {
+                case WM_SYSCOMMAND: {
+                    i32 cmd = msg.wParam;
+                    switch (cmd) {
+                    case SC_RESTORE: {
+                        minimized = false;
+                    } break;
+                    }
+                } break;
+                }
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
 
         TrackMouseEvent(&trackMouse);
         MSG msg;
@@ -705,6 +724,15 @@ WinMain(
                 changeY = false;
                 insideChangeX = false;
                 insideChangeY = false;
+            } break;
+            case WM_KEYDOWN: {
+                i32 keycode = msg.wParam;
+                switch (keycode) {
+                case 0x4D: { // NOTE(sen) M
+                    ShowWindow(window, SW_MINIMIZE);
+                    minimized = true;
+                }
+                }
             } break;
             default: {
                 TranslateMessage(&msg);
