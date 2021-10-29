@@ -19,6 +19,7 @@
     "LPWSTR",
     "LRESULT",
     "NCCALCSIZE",
+    "SFLOAT",
     "SIZENWSE",
     "SIZEWE",
     "VREDRAW",

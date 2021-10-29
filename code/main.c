@@ -1,4 +1,5 @@
 #include "stdint.h"
+#include "stddef.h"
 
 #include "stdlib.h"
 #include "string.h"
@@ -35,6 +36,22 @@ typedef struct SwapChain {
     VkRenderPass renderPass;
     VkImageView* imageViews;
 } SwapChain;
+
+typedef struct v2 {
+    f32 x;
+    f32 y;
+} v2;
+
+typedef struct v3 {
+    f32 r;
+    f32 g;
+    f32 b;
+} v3;
+
+typedef struct Vertex {
+    v2 pos;
+    v3 color;
+} Vertex;
 
 static b32 globalRunning = true;
 static void* globalMainFibre = 0;
@@ -104,7 +121,9 @@ initSwapChain(
     VkPipelineColorBlendStateCreateInfo* colorBlending,
     VkPipelineLayout pipelineLayout,
     u32 graphicsQueueFamilyIndex,
-    VkCommandPool commandPool
+    VkCommandPool commandPool,
+    VkBuffer vertexBuffer,
+    u32 vertexCount
 ) {
     ZeroMemory(swapChain, sizeof(SwapChain));
 
@@ -319,7 +338,11 @@ initSwapChain(
 
         vkCmdBindPipeline(swapChain->commandBuffers[index], VK_PIPELINE_BIND_POINT_GRAPHICS, swapChain->graphicsPipeline);
 
-        vkCmdDraw(swapChain->commandBuffers[index], 3, 1, 0, 0);
+        VkBuffer vertexBuffers[] = { vertexBuffer };
+        VkDeviceSize offsets[] = { 0 };
+        vkCmdBindVertexBuffers(swapChain->commandBuffers[index], 0, 1, vertexBuffers, offsets);
+
+        vkCmdDraw(swapChain->commandBuffers[index], vertexCount, 1, 0, 0);
 
         vkCmdEndRenderPass(swapChain->commandBuffers[index]);
 
@@ -535,9 +558,99 @@ WinMain(
 
     VkPipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageInfo, fragShaderStageInfo };
 
+    Vertex vertices[] = {
+    {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+    {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
+    {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+    };
+
+    VkVertexInputBindingDescription bindingDescription;
+    zero(bindingDescription);
+    bindingDescription.binding = 0;
+    bindingDescription.stride = sizeof(Vertex);
+    bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    VkVertexInputAttributeDescription posDescription;
+    zero(posDescription);
+    posDescription.binding = 0;
+    posDescription.location = 0;
+    posDescription.format = VK_FORMAT_R32G32_SFLOAT;
+    posDescription.offset = offsetof(Vertex, pos);
+
+    VkVertexInputAttributeDescription colDescription;
+    zero(colDescription);
+    colDescription.binding = 0;
+    colDescription.location = 1;
+    colDescription.format = VK_FORMAT_R32G32B32_SFLOAT;
+    colDescription.offset = offsetof(Vertex, color);
+
+    VkVertexInputAttributeDescription attDescriptions[] = {
+        posDescription,
+        colDescription,
+    };
+
     VkPipelineVertexInputStateCreateInfo vertexInputInfo;
     zero(vertexInputInfo);
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInputInfo.vertexBindingDescriptionCount = 1;
+    vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
+    vertexInputInfo.vertexAttributeDescriptionCount = arrayCount(attDescriptions);
+    vertexInputInfo.pVertexAttributeDescriptions = attDescriptions;
+
+    VkBufferCreateInfo bufferInfo;
+    zero(bufferInfo);
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = sizeof(vertices);
+    bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VkBuffer vertexBuffer;
+    {
+        VkResult result = vkCreateBuffer(device, &bufferInfo, 0, &vertexBuffer);
+        assert(result == VK_SUCCESS);
+    }
+
+    VkMemoryRequirements memRequirements;
+    vkGetBufferMemoryRequirements(device, vertexBuffer, &memRequirements);
+
+    VkPhysicalDeviceMemoryProperties memProperties;
+    vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
+    i32 vertexBufferMemIndex;
+    {
+        b32 found = false;
+        i32 properties = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        for (u32 index = 0; index < memProperties.memoryTypeCount; index++) {
+            b32 correctType = memRequirements.memoryTypeBits & (1 << index);
+            b32 correctProperties = (memProperties.memoryTypes[index].propertyFlags & properties) == properties;
+            if (correctType && correctProperties) {
+                found = true;
+                vertexBufferMemIndex = index;
+                break;
+            }
+        }
+        assert(found);
+    }
+
+    VkMemoryAllocateInfo allocInfo;
+    zero(allocInfo);
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = vertexBufferMemIndex;
+
+    VkDeviceMemory vertexBufferMemory;
+    {
+        VkResult result = vkAllocateMemory(device, &allocInfo, 0, &vertexBufferMemory);
+        assert(result == VK_SUCCESS);
+    }
+
+    assert(vkBindBufferMemory(device, vertexBuffer, vertexBufferMemory, 0) == VK_SUCCESS);
+
+    void* vertexGpuData;
+    {
+        VkResult result = vkMapMemory(device, vertexBufferMemory, 0, bufferInfo.size, 0, &vertexGpuData);
+        assert(result == VK_SUCCESS);
+    }
+    CopyMemory(vertexGpuData, vertices, sizeof(vertices));
 
     VkPipelineInputAssemblyStateCreateInfo inputAssembly;
     zero(inputAssembly);
@@ -612,7 +725,9 @@ WinMain(
         &colorBlending,
         pipelineLayout,
         graphicsQueueFamilyIndex,
-        commandPool
+        commandPool,
+        vertexBuffer,
+        arrayCount(vertices)
     );
 
 #define MAX_FRAMES_IN_FLIGHT 2
@@ -794,7 +909,9 @@ WinMain(
                     &colorBlending,
                     pipelineLayout,
                     graphicsQueueFamilyIndex,
-                    commandPool
+                    commandPool,
+                    vertexBuffer,
+                    arrayCount(vertices)
                 );
                 cleanupSwapChain(&oldSwapChain, device, commandPool);
                 result = vkAcquireNextImageKHR(
@@ -825,7 +942,10 @@ WinMain(
         submitInfo.signalSemaphoreCount = 1;
         submitInfo.pSignalSemaphores = signalSemaphores;
         vkResetFences(device, 1, inFlightFences + currentFrame);
-        assert(vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]) == VK_SUCCESS);
+        {
+            VkResult result = vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]);
+            assert(result == VK_SUCCESS);
+        }
 
         VkPresentInfoKHR presentInfo;
         zero(presentInfo);
