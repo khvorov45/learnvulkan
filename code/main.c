@@ -21,6 +21,7 @@
 #define arrayCount(arr) sizeof(arr) / sizeof(arr[0])
 
 typedef uint32_t u32;
+typedef uint16_t u16;
 typedef int32_t i32;
 typedef size_t usize;
 typedef intptr_t isize;
@@ -123,7 +124,8 @@ initSwapChain(
     u32 graphicsQueueFamilyIndex,
     VkCommandPool commandPool,
     VkBuffer vertexBuffer,
-    u32 vertexCount
+    VkBuffer indexBuffer,
+    u32 indexCount
 ) {
     ZeroMemory(swapChain, sizeof(SwapChain));
 
@@ -342,7 +344,9 @@ initSwapChain(
         VkDeviceSize offsets[] = { 0 };
         vkCmdBindVertexBuffers(swapChain->commandBuffers[index], 0, 1, vertexBuffers, offsets);
 
-        vkCmdDraw(swapChain->commandBuffers[index], vertexCount, 1, 0, 0);
+        vkCmdBindIndexBuffer(swapChain->commandBuffers[index], indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+
+        vkCmdDrawIndexed(swapChain->commandBuffers[index], indexCount, 1, 0, 0, 0);
 
         vkCmdEndRenderPass(swapChain->commandBuffers[index]);
 
@@ -418,6 +422,78 @@ createBuffer(
     }
 
     assert(vkBindBufferMemory(device, *buffer, *bufferMemory, 0) == VK_SUCCESS);
+}
+
+void
+createStagedBuffer(
+    VkDevice device,
+    VkPhysicalDevice physicalDevice,
+    void* data,
+    VkDeviceSize dataSize,
+    VkCommandPool commandPool,
+    VkQueue queue,
+    VkBufferUsageFlags bufferUsage,
+    VkBuffer* buffer,
+    VkDeviceMemory* bufferMemory
+) {
+    VkBuffer stagingBuffer;
+    VkDeviceMemory stagingBufferMemory;
+    createBuffer(
+        device, physicalDevice, dataSize,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        &stagingBuffer, &stagingBufferMemory
+    );
+    void* gpuData;
+    {
+        VkResult result = vkMapMemory(device, stagingBufferMemory, 0, dataSize, 0, &gpuData);
+        assert(result == VK_SUCCESS);
+    }
+    CopyMemory(gpuData, data, dataSize);
+
+    createBuffer(
+        device, physicalDevice, dataSize,
+        bufferUsage | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        buffer, bufferMemory
+    );
+
+    // NOTE(sen) Copy from staging to actual
+    {
+        VkCommandBufferAllocateInfo allocInfo;
+        zero(allocInfo);
+        allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocInfo.commandPool = commandPool;
+        allocInfo.commandBufferCount = 1;
+
+        VkCommandBuffer commandBuffer;
+        vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer);
+
+        VkCommandBufferBeginInfo beginInfo;
+        zero(beginInfo);
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+        vkBeginCommandBuffer(commandBuffer, &beginInfo);
+        VkBufferCopy copyRegion;
+        zero(copyRegion);
+        copyRegion.size = dataSize;
+        vkCmdCopyBuffer(commandBuffer, stagingBuffer, *buffer, 1, &copyRegion);
+
+        vkEndCommandBuffer(commandBuffer);
+
+        VkSubmitInfo submitInfo;
+        zero(submitInfo);
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &commandBuffer;
+
+        vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE);
+        vkQueueWaitIdle(queue);
+
+        vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+    }
 }
 
 int WINAPI
@@ -610,11 +686,7 @@ WinMain(
 
     VkPipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageInfo, fragShaderStageInfo };
 
-    Vertex vertices[] = {
-    {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-    {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-    {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
-    };
+
 
     VkVertexInputBindingDescription bindingDescription;
     zero(bindingDescription);
@@ -649,68 +721,29 @@ WinMain(
     vertexInputInfo.vertexAttributeDescriptionCount = arrayCount(attDescriptions);
     vertexInputInfo.pVertexAttributeDescriptions = attDescriptions;
 
-    u32 vertexBufferSize = sizeof(vertices);
-
-    VkBuffer stagingBuffer;
-    VkDeviceMemory stagingBufferMemory;
-    createBuffer(
-        device, physicalDevice, vertexBufferSize,
-        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-        &stagingBuffer, &stagingBufferMemory
-    );
-    void* vertexGpuData;
-    {
-        VkResult result = vkMapMemory(device, stagingBufferMemory, 0, vertexBufferSize, 0, &vertexGpuData);
-        assert(result == VK_SUCCESS);
-    }
-    CopyMemory(vertexGpuData, vertices, sizeof(vertices));
+    Vertex vertices[] = {
+           {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+           {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
+           {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
+           {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}
+    };
 
     VkBuffer vertexBuffer;
     VkDeviceMemory vertexBufferMemory;
-    createBuffer(
-        device, physicalDevice, vertexBufferSize,
-        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+    createStagedBuffer(
+        device, physicalDevice, vertices, sizeof(vertices), commandPool, graphicsQueue,
+        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
         &vertexBuffer, &vertexBufferMemory
     );
 
-    // NOTE(sen) Copy from staging to vertex
-    {
-        VkCommandBufferAllocateInfo allocInfo;
-        zero(allocInfo);
-        allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocInfo.commandPool = commandPool;
-        allocInfo.commandBufferCount = 1;
-
-        VkCommandBuffer commandBuffer;
-        vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer);
-
-        VkCommandBufferBeginInfo beginInfo;
-        zero(beginInfo);
-        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-        vkBeginCommandBuffer(commandBuffer, &beginInfo);
-        VkBufferCopy copyRegion;
-        zero(copyRegion);
-        copyRegion.size = vertexBufferSize;
-        vkCmdCopyBuffer(commandBuffer, stagingBuffer, vertexBuffer, 1, &copyRegion);
-
-        vkEndCommandBuffer(commandBuffer);
-
-        VkSubmitInfo submitInfo;
-        zero(submitInfo);
-        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submitInfo.commandBufferCount = 1;
-        submitInfo.pCommandBuffers = &commandBuffer;
-
-        vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
-        vkQueueWaitIdle(graphicsQueue);
-
-        vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
-    }
+    u16 indices[] = { 0, 1, 2, 2, 3, 0 };
+    VkBuffer indexBuffer;
+    VkDeviceMemory indexBufferMemory;
+    createStagedBuffer(
+        device, physicalDevice, indices, sizeof(indices), commandPool, graphicsQueue,
+        VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+        &indexBuffer, &indexBufferMemory
+    );
 
     VkPipelineInputAssemblyStateCreateInfo inputAssembly;
     zero(inputAssembly);
@@ -787,7 +820,8 @@ WinMain(
         graphicsQueueFamilyIndex,
         commandPool,
         vertexBuffer,
-        arrayCount(vertices)
+        indexBuffer,
+        arrayCount(indices)
     );
 
 #define MAX_FRAMES_IN_FLIGHT 2
@@ -971,7 +1005,8 @@ WinMain(
                     graphicsQueueFamilyIndex,
                     commandPool,
                     vertexBuffer,
-                    arrayCount(vertices)
+                    indexBuffer,
+                    arrayCount(indices)
                 );
                 cleanupSwapChain(&oldSwapChain, device, commandPool);
                 result = vkAcquireNextImageKHR(
