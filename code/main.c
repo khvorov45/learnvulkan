@@ -167,6 +167,9 @@ m4rotationZ(f32 radians) {
 
 m4
 m4rotation(v3 axis, f32 radians) {
+    // Taken from
+    // https://github.com/raysan5/raylib/blob/master/src/raymath.h
+
     m4 result = { 0 };
 
     f32 x = axis.x, y = axis.y, z = axis.z;
