@@ -5,6 +5,8 @@
 #include "string.h"
 #include "stdio.h"
 
+#include "math.h"
+
 #include "windows.h"
 #include "windowsx.h"
 
@@ -16,6 +18,7 @@
 #define true 1
 #define false 0
 
+#define TAU32 6.28318530717958647692
 #define assert(expr) if (!(expr)) { *((int*)0) = 0; }
 #define zero(x) ZeroMemory(&x, sizeof(x))
 #define arrayCount(arr) sizeof(arr) / sizeof(arr[0])
@@ -28,25 +31,22 @@ typedef intptr_t isize;
 typedef int32_t b32;
 typedef float f32;
 
-typedef struct SwapChain {
-    VkSwapchainKHR swapChain;
-    u32 imageCount;
-    VkCommandBuffer* commandBuffers;
-    VkFramebuffer* framebuffers;
-    VkPipeline graphicsPipeline;
-    VkRenderPass renderPass;
-    VkImageView* imageViews;
-} SwapChain;
-
 typedef struct v2 {
     f32 x;
     f32 y;
 } v2;
 
-typedef struct v3 {
-    f32 r;
-    f32 g;
-    f32 b;
+typedef union v3 {
+    struct {
+        f32 x;
+        f32 y;
+        f32 z;
+    };
+    struct {
+        f32 r;
+        f32 g;
+        f32 b;
+    };
 } v3;
 
 typedef struct Vertex {
@@ -54,9 +54,282 @@ typedef struct Vertex {
     v3 color;
 } Vertex;
 
+typedef struct m4 {
+    f32 m0, m4, m8, m12;
+    f32 m1, m5, m9, m13;
+    f32 m2, m6, m10, m14;
+    f32 m3, m7, m11, m15;
+} m4;
+
+typedef struct UniformBufferObject {
+    m4 model;
+    m4 view;
+    m4 proj;
+} UniformBufferObject;
+
+typedef struct SwapChain {
+    VkSwapchainKHR swapChain;
+    u32 imageCount;
+    v2 surfaceDim;
+    VkCommandBuffer* commandBuffers;
+    VkFramebuffer* framebuffers;
+    VkPipeline graphicsPipeline;
+    VkRenderPass renderPass;
+    VkImageView* imageViews;
+    VkBuffer* uniformBuffers;
+    VkDeviceMemory* uniformBuffersMemory;
+    VkDescriptorPool descriptorPool;
+    VkDescriptorSetLayout* layouts;
+    VkDescriptorSet* descriptorSets;
+} SwapChain;
+
 static b32 globalRunning = true;
 static void* globalMainFibre = 0;
 static void* globalPollEventsFibre = 0;
+
+v3
+v3new(f32 x, f32 y, f32 z) {
+    v3 result = { .x = x, .y = y, .z = z };
+    return result;
+}
+
+m4
+m4transpose(m4 mat) {
+    // Taken from
+    // https://github.com/raysan5/raylib/blob/master/src/raymath.h
+
+    m4 result = { 0 };
+
+    result.m0 = mat.m0;
+    result.m1 = mat.m4;
+    result.m2 = mat.m8;
+    result.m3 = mat.m12;
+    result.m4 = mat.m1;
+    result.m5 = mat.m5;
+    result.m6 = mat.m9;
+    result.m7 = mat.m13;
+    result.m8 = mat.m2;
+    result.m9 = mat.m6;
+    result.m10 = mat.m10;
+    result.m11 = mat.m14;
+    result.m12 = mat.m3;
+    result.m13 = mat.m7;
+    result.m14 = mat.m11;
+    result.m15 = mat.m15;
+
+    return result;
+}
+
+m4
+m4identity() {
+    // Taken from
+    // https://github.com/raysan5/raylib/blob/master/src/raymath.h
+
+    m4 result = { 1.0f, 0.0f, 0.0f, 0.0f,
+                  0.0f, 1.0f, 0.0f, 0.0f,
+                  0.0f, 0.0f, 1.0f, 0.0f,
+                  0.0f, 0.0f, 0.0f, 1.0f };
+    return result;
+}
+
+m4
+m4translation(f32 x, f32 y, f32 z) {
+    // Taken from
+    // https://github.com/raysan5/raylib/blob/master/src/raymath.h
+
+    m4 result = { 1.0f, 0.0f, 0.0f, x,
+                  0.0f, 1.0f, 0.0f, y,
+                  0.0f, 0.0f, 1.0f, z,
+                  0.0f, 0.0f, 0.0f, 1.0f };
+    return result;
+}
+
+m4
+m4rotationZ(f32 radians) {
+    // Taken from
+    // https://github.com/raysan5/raylib/blob/master/src/raymath.h
+
+    m4 result = { 1.0f, 0.0f, 0.0f, 0.0f,
+                  0.0f, 1.0f, 0.0f, 0.0f,
+                  0.0f, 0.0f, 1.0f, 0.0f,
+                  0.0f, 0.0f, 0.0f, 1.0f };
+
+    f32 cosres = cosf(radians);
+    f32 sinres = sinf(radians);
+
+    result.m0 = cosres;
+    result.m1 = sinres;
+    result.m4 = -sinres;
+    result.m5 = cosres;
+
+    return result;
+}
+
+m4
+m4rotation(v3 axis, f32 radians) {
+    m4 result = { 0 };
+
+    f32 x = axis.x, y = axis.y, z = axis.z;
+
+    f32 lengthSquared = x * x + y * y + z * z;
+
+    if ((lengthSquared != 1.0f) && (lengthSquared != 0.0f)) {
+        f32 ilength = 1.0f / sqrtf(lengthSquared);
+        x *= ilength;
+        y *= ilength;
+        z *= ilength;
+    }
+
+    f32 sinres = sinf(radians);
+    f32 cosres = cosf(radians);
+    f32 t = 1.0f - cosres;
+
+    result.m0 = x * x * t + cosres;
+    result.m1 = y * x * t + z * sinres;
+    result.m2 = z * x * t - y * sinres;
+    result.m3 = 0.0f;
+
+    result.m4 = x * y * t - z * sinres;
+    result.m5 = y * y * t + cosres;
+    result.m6 = z * y * t + x * sinres;
+    result.m7 = 0.0f;
+
+    result.m8 = x * z * t + y * sinres;
+    result.m9 = y * z * t - x * sinres;
+    result.m10 = z * z * t + cosres;
+    result.m11 = 0.0f;
+
+    result.m12 = 0.0f;
+    result.m13 = 0.0f;
+    result.m14 = 0.0f;
+    result.m15 = 1.0f;
+
+    return result;
+}
+
+m4
+m4scale(f32 x, f32 y, f32 z) {
+    // Taken from
+    // https://github.com/raysan5/raylib/blob/master/src/raymath.h
+
+    m4 result = { x, 0.0f, 0.0f, 0.0f,
+                  0.0f, y, 0.0f, 0.0f,
+                  0.0f, 0.0f, z, 0.0f,
+                  0.0f, 0.0f, 0.0f, 1.0f };
+    return result;
+}
+
+m4
+m4lookat(v3 eye, v3 target, v3 up) {
+    // Taken from
+    // https://github.com/raysan5/raylib/blob/master/src/raymath.h
+
+    m4 result = { 0 };
+
+    f32 length = 0.0f;
+    f32 ilength = 0.0f;
+
+    // Vector3Subtract(eye, target)
+    v3 vz = { eye.x - target.x, eye.y - target.y, eye.z - target.z };
+
+    // Vector3Normalize(vz)
+    v3 v = vz;
+    length = sqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
+    if (length == 0.0f) length = 1.0f;
+    ilength = 1.0f / length;
+    vz.x *= ilength;
+    vz.y *= ilength;
+    vz.z *= ilength;
+
+    // Vector3CrossProduct(up, vz)
+    v3 vx = { up.y * vz.z - up.z * vz.y, up.z * vz.x - up.x * vz.z, up.x * vz.y - up.y * vz.x };
+
+    // Vector3Normalize(x)
+    v = vx;
+    length = sqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
+    if (length == 0.0f) length = 1.0f;
+    ilength = 1.0f / length;
+    vx.x *= ilength;
+    vx.y *= ilength;
+    vx.z *= ilength;
+
+    // Vector3CrossProduct(vz, vx)
+    v3 vy = { vz.y * vx.z - vz.z * vx.y, vz.z * vx.x - vz.x * vx.z, vz.x * vx.y - vz.y * vx.x };
+
+    result.m0 = vx.x;
+    result.m1 = vy.x;
+    result.m2 = vz.x;
+    result.m3 = 0.0f;
+    result.m4 = vx.y;
+    result.m5 = vy.y;
+    result.m6 = vz.y;
+    result.m7 = 0.0f;
+    result.m8 = vx.z;
+    result.m9 = vy.z;
+    result.m10 = vz.z;
+    result.m11 = 0.0f;
+    result.m12 = -(vx.x * eye.x + vx.y * eye.y + vx.z * eye.z);   // Vector3DotProduct(vx, eye)
+    result.m13 = -(vy.x * eye.x + vy.y * eye.y + vy.z * eye.z);   // Vector3DotProduct(vy, eye)
+    result.m14 = -(vz.x * eye.x + vz.y * eye.y + vz.z * eye.z);   // Vector3DotProduct(vz, eye)
+    result.m15 = 1.0f;
+
+    return result;
+}
+
+m4
+m4perspective(f32 fovYRadians, f32 aspect, f32 nearPlane, f32 farPlane) {
+    // Taken from
+    // https://github.com/raysan5/raylib/blob/master/src/raymath.h
+
+    m4 result = { 0 };
+
+    f32 top = nearPlane * tanf(fovYRadians * 0.5f);
+    f32 bottom = -top;
+    f32 right = top * aspect;
+    f32 left = -right;
+
+    f32 rl = right - left;
+    f32 tb = top - bottom;
+    f32 fn = farPlane - nearPlane;
+
+    result.m0 = (nearPlane * 2.0f) / rl;
+    result.m5 = (nearPlane * 2.0f) / tb;
+    result.m8 = (right + left) / rl;
+    result.m9 = (top + bottom) / tb;
+    result.m10 = -(farPlane + nearPlane) / fn;
+    result.m11 = -1.0f;
+    result.m14 = -(farPlane * nearPlane * 2.0f) / fn;
+
+    return result;
+}
+
+
+m4
+m4mul(m4 left, m4 right) {
+    // Taken from
+    // https://github.com/raysan5/raylib/blob/master/src/raymath.h
+
+    m4 result = { 0 };
+
+    result.m0 = left.m0 * right.m0 + left.m1 * right.m4 + left.m2 * right.m8 + left.m3 * right.m12;
+    result.m1 = left.m0 * right.m1 + left.m1 * right.m5 + left.m2 * right.m9 + left.m3 * right.m13;
+    result.m2 = left.m0 * right.m2 + left.m1 * right.m6 + left.m2 * right.m10 + left.m3 * right.m14;
+    result.m3 = left.m0 * right.m3 + left.m1 * right.m7 + left.m2 * right.m11 + left.m3 * right.m15;
+    result.m4 = left.m4 * right.m0 + left.m5 * right.m4 + left.m6 * right.m8 + left.m7 * right.m12;
+    result.m5 = left.m4 * right.m1 + left.m5 * right.m5 + left.m6 * right.m9 + left.m7 * right.m13;
+    result.m6 = left.m4 * right.m2 + left.m5 * right.m6 + left.m6 * right.m10 + left.m7 * right.m14;
+    result.m7 = left.m4 * right.m3 + left.m5 * right.m7 + left.m6 * right.m11 + left.m7 * right.m15;
+    result.m8 = left.m8 * right.m0 + left.m9 * right.m4 + left.m10 * right.m8 + left.m11 * right.m12;
+    result.m9 = left.m8 * right.m1 + left.m9 * right.m5 + left.m10 * right.m9 + left.m11 * right.m13;
+    result.m10 = left.m8 * right.m2 + left.m9 * right.m6 + left.m10 * right.m10 + left.m11 * right.m14;
+    result.m11 = left.m8 * right.m3 + left.m9 * right.m7 + left.m10 * right.m11 + left.m11 * right.m15;
+    result.m12 = left.m12 * right.m0 + left.m13 * right.m4 + left.m14 * right.m8 + left.m15 * right.m12;
+    result.m13 = left.m12 * right.m1 + left.m13 * right.m5 + left.m14 * right.m9 + left.m15 * right.m13;
+    result.m14 = left.m12 * right.m2 + left.m13 * right.m6 + left.m14 * right.m10 + left.m15 * right.m14;
+    result.m15 = left.m12 * right.m3 + left.m13 * right.m7 + left.m14 * right.m11 + left.m15 * right.m15;
+
+    return result;
+}
 
 void
 printMsgName(u32 msg_code) {
@@ -107,6 +380,58 @@ createShaderModule(char* filename, VkDevice device) {
 }
 
 void
+createBuffer(
+    VkDevice device, VkPhysicalDevice physicalDevice,
+    VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties,
+    VkBuffer* buffer, VkDeviceMemory* bufferMemory
+) {
+    VkBufferCreateInfo bufferInfo;
+    zero(bufferInfo);
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = size;
+    bufferInfo.usage = usage;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    {
+        VkResult result = vkCreateBuffer(device, &bufferInfo, 0, buffer);
+        assert(result == VK_SUCCESS);
+    }
+
+    VkMemoryRequirements memRequirements;
+    vkGetBufferMemoryRequirements(device, *buffer, &memRequirements);
+
+    VkPhysicalDeviceMemoryProperties memProperties;
+    vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
+    i32 bufferMemIndex;
+    {
+        b32 found = false;
+        for (u32 index = 0; index < memProperties.memoryTypeCount; index++) {
+            b32 correctType = memRequirements.memoryTypeBits & (1 << index);
+            b32 correctProperties = (memProperties.memoryTypes[index].propertyFlags & properties) == properties;
+            if (correctType && correctProperties) {
+                found = true;
+                bufferMemIndex = index;
+                break;
+            }
+        }
+        assert(found);
+    }
+
+    VkMemoryAllocateInfo allocInfo;
+    zero(allocInfo);
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = bufferMemIndex;
+
+    {
+        VkResult result = vkAllocateMemory(device, &allocInfo, 0, bufferMemory);
+        assert(result == VK_SUCCESS);
+    }
+
+    assert(vkBindBufferMemory(device, *buffer, *bufferMemory, 0) == VK_SUCCESS);
+}
+
+void
 initSwapChain(
     SwapChain* swapChain,
     VkSwapchainKHR oldSwapChain,
@@ -125,7 +450,8 @@ initSwapChain(
     VkCommandPool commandPool,
     VkBuffer vertexBuffer,
     VkBuffer indexBuffer,
-    u32 indexCount
+    u32 indexCount,
+    VkDescriptorSetLayout descriptorSetLayout
 ) {
     ZeroMemory(swapChain, sizeof(SwapChain));
 
@@ -151,6 +477,9 @@ initSwapChain(
         }
         assert(formatFound);
         free(formats);
+
+        swapChain->surfaceDim.x = surfaceCapabilities.currentExtent.width;
+        swapChain->surfaceDim.y = surfaceCapabilities.currentExtent.height;
     }
 
     {
@@ -306,6 +635,67 @@ initSwapChain(
         assert(result == VK_SUCCESS);
     }
 
+    swapChain->uniformBuffers = malloc(sizeof(VkBuffer) * swapChain->imageCount);
+    swapChain->uniformBuffersMemory = malloc(sizeof(VkDeviceMemory) * swapChain->imageCount);
+    for (size_t index = 0; index < swapChain->imageCount; index++) {
+        createBuffer(
+            device, physicalDevice,
+            sizeof(UniformBufferObject),
+            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            swapChain->uniformBuffers + index, swapChain->uniformBuffersMemory + index
+        );
+    }
+
+    VkDescriptorPoolSize poolSize;
+    zero(poolSize);
+    poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    poolSize.descriptorCount = swapChain->imageCount;
+
+    VkDescriptorPoolCreateInfo poolInfo;
+    zero(poolInfo);
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    poolInfo.maxSets = swapChain->imageCount;
+
+    assert(vkCreateDescriptorPool(device, &poolInfo, 0, &swapChain->descriptorPool) == VK_SUCCESS);
+
+    {
+        swapChain->layouts = malloc(sizeof(VkDescriptorSetLayout) * swapChain->imageCount);
+        for (u32 index = 0; index < swapChain->imageCount; index++) {
+            swapChain->layouts[index] = descriptorSetLayout;
+        }
+        swapChain->descriptorSets = malloc(sizeof(VkDescriptorSet) * swapChain->imageCount);
+        VkDescriptorSetAllocateInfo allocInfo;
+        zero(allocInfo);
+        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool = swapChain->descriptorPool;
+        allocInfo.descriptorSetCount = swapChain->imageCount;
+        allocInfo.pSetLayouts = swapChain->layouts;
+        assert(vkAllocateDescriptorSets(device, &allocInfo, swapChain->descriptorSets) == VK_SUCCESS);
+    }
+
+    for (u32 index = 0; index < swapChain->imageCount; index++) {
+        VkDescriptorBufferInfo bufferInfo;
+        zero(bufferInfo);
+        bufferInfo.buffer = swapChain->uniformBuffers[index];
+        bufferInfo.offset = 0;
+        bufferInfo.range = sizeof(UniformBufferObject);
+
+        VkWriteDescriptorSet descriptorWrite;
+        zero(descriptorWrite);
+        descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrite.dstSet = swapChain->descriptorSets[index];
+        descriptorWrite.dstBinding = 0;
+        descriptorWrite.dstArrayElement = 0;
+        descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        descriptorWrite.descriptorCount = 1;
+        descriptorWrite.pBufferInfo = &bufferInfo;
+
+        vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, 0);
+    }
+
     swapChain->commandBuffers = malloc(sizeof(VkCommandBuffer) * swapChain->imageCount);
     VkCommandBufferAllocateInfo allocInfo;
     zero(allocInfo);
@@ -342,9 +732,14 @@ initSwapChain(
 
         VkBuffer vertexBuffers[] = { vertexBuffer };
         VkDeviceSize offsets[] = { 0 };
-        vkCmdBindVertexBuffers(swapChain->commandBuffers[index], 0, 1, vertexBuffers, offsets);
 
+        vkCmdBindVertexBuffers(swapChain->commandBuffers[index], 0, 1, vertexBuffers, offsets);
         vkCmdBindIndexBuffer(swapChain->commandBuffers[index], indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+        vkCmdBindDescriptorSets(
+            swapChain->commandBuffers[index],
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            pipelineLayout, 0, 1, swapChain->descriptorSets + index, 0, 0
+        );
 
         vkCmdDrawIndexed(swapChain->commandBuffers[index], indexCount, 1, 0, 0, 0);
 
@@ -365,63 +760,18 @@ cleanupSwapChain(SwapChain* swapChain, VkDevice device, VkCommandPool commandPoo
     vkDestroyRenderPass(device, swapChain->renderPass, 0);
     for (size_t index = 0; index < swapChain->imageCount; index++) {
         vkDestroyImageView(device, swapChain->imageViews[index], 0);
+        vkDestroyBuffer(device, swapChain->uniformBuffers[index], 0);
+        vkFreeMemory(device, swapChain->uniformBuffersMemory[index], 0);
     }
     vkDestroySwapchainKHR(device, swapChain->swapChain, 0);
+    vkDestroyDescriptorPool(device, swapChain->descriptorPool, 0);
     free(swapChain->imageViews);
     free(swapChain->framebuffers);
     free(swapChain->commandBuffers);
-}
-
-void
-createBuffer(
-    VkDevice device, VkPhysicalDevice physicalDevice,
-    VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties,
-    VkBuffer* buffer, VkDeviceMemory* bufferMemory
-) {
-    VkBufferCreateInfo bufferInfo;
-    zero(bufferInfo);
-    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufferInfo.size = size;
-    bufferInfo.usage = usage;
-    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    {
-        VkResult result = vkCreateBuffer(device, &bufferInfo, 0, buffer);
-        assert(result == VK_SUCCESS);
-    }
-
-    VkMemoryRequirements memRequirements;
-    vkGetBufferMemoryRequirements(device, *buffer, &memRequirements);
-
-    VkPhysicalDeviceMemoryProperties memProperties;
-    vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
-    i32 bufferMemIndex;
-    {
-        b32 found = false;
-        for (u32 index = 0; index < memProperties.memoryTypeCount; index++) {
-            b32 correctType = memRequirements.memoryTypeBits & (1 << index);
-            b32 correctProperties = (memProperties.memoryTypes[index].propertyFlags & properties) == properties;
-            if (correctType && correctProperties) {
-                found = true;
-                bufferMemIndex = index;
-                break;
-            }
-        }
-        assert(found);
-    }
-
-    VkMemoryAllocateInfo allocInfo;
-    zero(allocInfo);
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memRequirements.size;
-    allocInfo.memoryTypeIndex = bufferMemIndex;
-
-    {
-        VkResult result = vkAllocateMemory(device, &allocInfo, 0, bufferMemory);
-        assert(result == VK_SUCCESS);
-    }
-
-    assert(vkBindBufferMemory(device, *buffer, *bufferMemory, 0) == VK_SUCCESS);
+    free(swapChain->uniformBuffers);
+    free(swapChain->uniformBuffersMemory);
+    free(swapChain->layouts);
+    free(swapChain->descriptorSets);
 }
 
 void
@@ -686,8 +1036,6 @@ WinMain(
 
     VkPipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageInfo, fragShaderStageInfo };
 
-
-
     VkVertexInputBindingDescription bindingDescription;
     zero(bindingDescription);
     bindingDescription.binding = 0;
@@ -722,10 +1070,10 @@ WinMain(
     vertexInputInfo.pVertexAttributeDescriptions = attDescriptions;
 
     Vertex vertices[] = {
-           {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-           {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-           {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
-           {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}
+           {{-0.5f, 0.5f}, {1.0f, 0.0f, 0.0f}},
+           {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
+           {{-0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}},
+           {{0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}}
     };
 
     VkBuffer vertexBuffer;
@@ -736,7 +1084,7 @@ WinMain(
         &vertexBuffer, &vertexBufferMemory
     );
 
-    u16 indices[] = { 0, 1, 2, 2, 3, 0 };
+    u16 indices[] = { 0, 1, 2, 1, 3, 2 };
     VkBuffer indexBuffer;
     VkDeviceMemory indexBufferMemory;
     createStagedBuffer(
@@ -744,6 +1092,7 @@ WinMain(
         VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
         &indexBuffer, &indexBufferMemory
     );
+
 
     VkPipelineInputAssemblyStateCreateInfo inputAssembly;
     zero(inputAssembly);
@@ -792,11 +1141,29 @@ WinMain(
     dynamicState.dynamicStateCount = 2;
     dynamicState.pDynamicStates = dynamicStates;
 
+    VkDescriptorSetLayoutBinding uboLayoutBinding;
+    zero(uboLayoutBinding);
+    uboLayoutBinding.binding = 0;
+    uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    uboLayoutBinding.descriptorCount = 1;
+    uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo;
+    zero(layoutInfo);
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = 1;
+    layoutInfo.pBindings = &uboLayoutBinding;
+
+    VkDescriptorSetLayout descriptorSetLayout;
+    assert(vkCreateDescriptorSetLayout(device, &layoutInfo, 0, &descriptorSetLayout) == VK_SUCCESS);
+
     VkPipelineLayout pipelineLayout;
     {
         VkPipelineLayoutCreateInfo pipelineLayoutInfo;
         zero(pipelineLayoutInfo);
         pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pipelineLayoutInfo.setLayoutCount = 1;
+        pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
 
         VkResult result = vkCreatePipelineLayout(device, &pipelineLayoutInfo, 0, &pipelineLayout);
         assert(result == VK_SUCCESS);
@@ -821,7 +1188,8 @@ WinMain(
         commandPool,
         vertexBuffer,
         indexBuffer,
-        arrayCount(indices)
+        arrayCount(indices),
+        descriptorSetLayout
     );
 
 #define MAX_FRAMES_IN_FLIGHT 2
@@ -873,6 +1241,10 @@ WinMain(
     HCURSOR cursorSizeNWSE = LoadCursorW(0, (LPWSTR)IDC_SIZENWSE);
 
     b32 minimized = false;
+
+    f32 angle = 0.0f;
+    f32 xDisplacement = 0.0f;
+    f32 xDirection = 1.0f;
     while (globalRunning) {
 
         //
@@ -1006,7 +1378,8 @@ WinMain(
                     commandPool,
                     vertexBuffer,
                     indexBuffer,
-                    arrayCount(indices)
+                    arrayCount(indices),
+                    descriptorSetLayout
                 );
                 cleanupSwapChain(&oldSwapChain, device, commandPool);
                 result = vkAcquireNextImageKHR(
@@ -1021,6 +1394,35 @@ WinMain(
             vkWaitForFences(device, 1, imagesInFlight + imageIndex, VK_TRUE, UINT64_MAX);
         }
         imagesInFlight[imageIndex] = inFlightFences[currentFrame];
+
+        // NOTE(sen) Update uniform
+        {
+            UniformBufferObject ubo;
+            zero(ubo);
+            ubo.model = m4transpose(m4mul(
+                m4mul(m4rotationZ(angle), m4translation(xDisplacement, 0.0f, 0.0f)),
+                m4scale(1.0f, -1.0f, 1.0f)
+            ));
+            ubo.view = m4transpose(
+                m4lookat(v3new(0.0f, -0.000001f, 1.5f), v3new(0.0f, 0.0f, 0.0f), v3new(0.0f, 0.0f, 1.0f))
+            );
+            ubo.proj = m4transpose(m4perspective(TAU32 / 8, swapChain.surfaceDim.x / swapChain.surfaceDim.y, 0.1f, 10.0f));
+
+            void* data;
+            VkDeviceMemory uniformBuffermemory = swapChain.uniformBuffersMemory[imageIndex];
+            vkMapMemory(device, uniformBuffermemory, 0, sizeof(ubo), 0, &data);
+            CopyMemory(data, &ubo, sizeof(ubo));
+            vkUnmapMemory(device, uniformBuffermemory);
+
+            angle += 0.001f;
+            if (angle > TAU32) {
+                angle -= TAU32;
+            }
+            xDisplacement += 0.001 * xDirection;
+            if (xDisplacement > 0.5f || xDisplacement < -0.5f) {
+                xDirection *= -1.0f;
+            }
+        }
 
         VkSubmitInfo submitInfo;
         zero(submitInfo);

@@ -3,7 +3,8 @@
     "vulkan.h": "c",
     "*.rh": "c",
     "system_error": "c",
-    "xlocale": "c"
+    "xlocale": "c",
+    "cmath": "c"
   },
   "cSpell.words": [
     "ERASEBKGND",
@@ -11,6 +12,7 @@
     "HCURSOR",
     "HREDRAW",
     "HWND",
+    "ilength",
     "LBUTTONDOWN",
     "LBUTTONUP",
     "LPARAM",
