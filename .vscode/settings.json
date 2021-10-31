@@ -24,6 +24,7 @@
     "SFLOAT",
     "SIZENWSE",
     "SIZEWE",
+    "unnormalized",
     "VREDRAW",
     "WNDCLASSEX",
     "WNDCLASSEXW"
