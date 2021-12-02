@@ -63,6 +63,20 @@ typedef struct m4 {
     f32 m3, m7, m11, m15;
 } m4;
 
+typedef struct Rect {
+    v2 topleft;
+    v2 bottomright;
+    v2 textopleft;
+    v2 texbottomright;
+} Rect;
+
+typedef struct VertexIndexBuffer {
+    Vertex* vertexData;
+    u16* indexData;
+    u32 curVertex;
+    u32 curIndex;
+} VertexIndexBuffer;
+
 typedef struct UniformBufferObject {
     m4 model;
     m4 view;
@@ -361,6 +375,60 @@ LRESULT windowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     } break;
     }
     return DefWindowProcW(hWnd, msg, wParam, lParam);
+}
+
+Rect
+moveRect(Rect rect, f32 byx, f32 byy) {
+    Rect result = rect;
+    result.topleft.x += byx;
+    result.topleft.y += byy;
+    result.bottomright.x += byx;
+    result.bottomright.y += byy;
+    return result;
+}
+
+void
+pushRect(VertexIndexBuffer* buffer, Rect rect) {
+
+    v3 black = { 0 };
+
+    buffer->vertexData[buffer->curVertex].pos = rect.topleft;
+    buffer->vertexData[buffer->curVertex].color = black;
+    buffer->vertexData[buffer->curVertex].texture = rect.textopleft;
+
+    v2 topright = rect.topleft;
+    topright.x = rect.bottomright.x;
+
+    v2 textopright = rect.textopleft;
+    textopright.x = rect.texbottomright.x;
+
+    buffer->vertexData[buffer->curVertex + 1].pos = topright;
+    buffer->vertexData[buffer->curVertex + 1].color = black;
+    buffer->vertexData[buffer->curVertex + 1].texture = textopright;
+
+    v2 bottomleft = rect.bottomright;
+    bottomleft.x = rect.topleft.x;
+
+    v2 texbottomleft = rect.texbottomright;
+    texbottomleft.x = rect.textopleft.x;
+
+    buffer->vertexData[buffer->curVertex + 2].pos = bottomleft;
+    buffer->vertexData[buffer->curVertex + 2].color = black;
+    buffer->vertexData[buffer->curVertex + 2].texture = texbottomleft;
+
+    buffer->vertexData[buffer->curVertex + 3].pos = rect.bottomright;
+    buffer->vertexData[buffer->curVertex + 3].color = black;
+    buffer->vertexData[buffer->curVertex + 3].texture = rect.texbottomright;
+
+    buffer->indexData[buffer->curIndex + 0] = buffer->curVertex + 0;
+    buffer->indexData[buffer->curIndex + 1] = buffer->curVertex + 1;
+    buffer->indexData[buffer->curIndex + 2] = buffer->curVertex + 2;
+    buffer->indexData[buffer->curIndex + 3] = buffer->curVertex + 1;
+    buffer->indexData[buffer->curIndex + 4] = buffer->curVertex + 3;
+    buffer->indexData[buffer->curIndex + 5] = buffer->curVertex + 2;
+
+    buffer->curVertex += 4;
+    buffer->curIndex += 6;
 }
 
 VkShaderModule
@@ -1160,26 +1228,47 @@ WinMain(
     vertexInputInfo.vertexAttributeDescriptionCount = arrayCount(attDescriptions);
     vertexInputInfo.pVertexAttributeDescriptions = attDescriptions;
 
-    Vertex vertices[] = {
-           {{-0.5f, 0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f}},
-           {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f}},
-           {{-0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}},
-           {{0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 0.0f}}
-    };
+    VertexIndexBuffer vertexIndexBuffer = { 0 };
+    vertexIndexBuffer.vertexData = malloc(sizeof(Vertex) * 1000);
+    vertexIndexBuffer.indexData = malloc(sizeof(u16) * 1000);
+
+    Rect rect1 = { 0 };
+
+    rect1.topleft.x = -0.5f;
+    rect1.topleft.y = -0.5f;
+    rect1.bottomright.x = 0.5f;
+    rect1.bottomright.y = 0.5f;
+
+    rect1.textopleft.x = 0.0f;
+    rect1.textopleft.y = 1.0f;
+    rect1.texbottomright.x = 1.0f;
+    rect1.texbottomright.y = 0.0f;
+
+    Rect rect2 = moveRect(rect1, 0.1f, 0.1f);
+
+    pushRect(&vertexIndexBuffer, rect2);
+    pushRect(&vertexIndexBuffer, rect1);
 
     VkBuffer vertexBuffer;
     VkDeviceMemory vertexBufferMemory;
     createStagedBuffer(
-        device, physicalDevice, vertices, sizeof(vertices), commandPool, graphicsQueue,
+        device, physicalDevice,
+        vertexIndexBuffer.vertexData,
+        sizeof(Vertex) * vertexIndexBuffer.curVertex,
+        commandPool,
+        graphicsQueue,
         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
         &vertexBuffer, &vertexBufferMemory
     );
 
-    u16 indices[] = { 0, 1, 2, 1, 3, 2 };
     VkBuffer indexBuffer;
     VkDeviceMemory indexBufferMemory;
     createStagedBuffer(
-        device, physicalDevice, indices, sizeof(indices), commandPool, graphicsQueue,
+        device, physicalDevice,
+        vertexIndexBuffer.indexData,
+        sizeof(u16) * vertexIndexBuffer.curIndex,
+        commandPool,
+        graphicsQueue,
         VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
         &indexBuffer, &indexBufferMemory
     );
@@ -1188,10 +1277,10 @@ WinMain(
     u32 textureHeight = 2;
     u32 textureSize = textureWidth * textureHeight * sizeof(u32);
     u32* texture = malloc(textureSize);
-    texture[0] = 0xFF000000;
-    texture[1] = 0x00FF0000;
-    texture[2] = 0x0000FF00;
-    texture[3] = 0x000000FF;
+    texture[0] = 0xFFFF0000;
+    texture[1] = 0xFF00FF00;
+    texture[2] = 0xFF0000FF;
+    texture[3] = 0xFF000000;
 
     VkBuffer textureStagingBuffer;
     VkDeviceMemory textureStagingBufferMemory;
@@ -1425,7 +1514,7 @@ WinMain(
         commandPool,
         vertexBuffer,
         indexBuffer,
-        arrayCount(indices),
+        vertexIndexBuffer.curIndex,
         descriptorSetLayout,
         textureImageView,
         textureSampler
@@ -1617,7 +1706,7 @@ WinMain(
                     commandPool,
                     vertexBuffer,
                     indexBuffer,
-                    arrayCount(indices),
+                    vertexIndexBuffer.curIndex,
                     descriptorSetLayout,
                     textureImageView,
                     textureSampler
@@ -1642,7 +1731,7 @@ WinMain(
             zero(ubo);
             ubo.model = m4transpose(m4mul(
                 m4mul(m4rotationZ(0), m4translation(0.0f, 0.0f, 0.0f)),
-                m4scale(1.0f, -1.0f, 1.0f)
+                m4scale(1.0f, 1.0f, 1.0f)
             ));
             ubo.view = m4transpose(
                 m4lookat(v3new(0.0f, -0.000001f, 1.5f), v3new(0.0f, 0.0f, 0.0f), v3new(0.0f, 0.0f, 1.0f))
