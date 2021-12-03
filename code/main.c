@@ -536,7 +536,6 @@ initSwapChain(
     VkCommandPool commandPool,
     VkBuffer vertexBuffer,
     VkBuffer indexBuffer,
-    u32 indexCount,
     VkDescriptorSetLayout descriptorSetLayout,
     VkImageView textureImageView,
     VkSampler textureSampler
@@ -805,7 +804,7 @@ initSwapChain(
     allocInfo.commandBufferCount = swapChain->imageCount;
     assert(vkAllocateCommandBuffers(device, &allocInfo, swapChain->commandBuffers) == VK_SUCCESS);
 
-    for (size_t index = 0; index < swapChain->imageCount; index++) {
+    /*for (size_t index = 0; index < swapChain->imageCount; index++) {
         VkCommandBufferBeginInfo beginInfo;
         zero(beginInfo);
         beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -846,7 +845,7 @@ initSwapChain(
         vkCmdEndRenderPass(swapChain->commandBuffers[index]);
 
         assert(vkEndCommandBuffer(swapChain->commandBuffers[index]) == VK_SUCCESS);
-    }
+    }*/
 }
 
 void
@@ -956,28 +955,28 @@ void
 createStagedBuffer(
     VkDevice device,
     VkPhysicalDevice physicalDevice,
-    void* data,
     VkDeviceSize dataSize,
     VkCommandPool commandPool,
     VkQueue queue,
     VkBufferUsageFlags bufferUsage,
+    VkBuffer* stagingBuffer,
+    VkDeviceMemory* stagingBufferMemory,
     VkBuffer* buffer,
-    VkDeviceMemory* bufferMemory
+    VkDeviceMemory* bufferMemory,
+    void** gpuData
 ) {
-    VkBuffer stagingBuffer;
-    VkDeviceMemory stagingBufferMemory;
+
     createBuffer(
         device, physicalDevice, dataSize,
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-        &stagingBuffer, &stagingBufferMemory
+        stagingBuffer, stagingBufferMemory
     );
-    void* gpuData;
+
     {
-        VkResult result = vkMapMemory(device, stagingBufferMemory, 0, dataSize, 0, &gpuData);
+        VkResult result = vkMapMemory(device, *stagingBufferMemory, 0, dataSize, 0, gpuData);
         assert(result == VK_SUCCESS);
     }
-    CopyMemory(gpuData, data, dataSize);
 
     createBuffer(
         device, physicalDevice, dataSize,
@@ -986,17 +985,6 @@ createStagedBuffer(
         buffer, bufferMemory
     );
 
-    // NOTE(sen) Copy from staging to actual
-    {
-        VkCommandBuffer commandBuffer = beginSingleTimeCommandBuffer(device, commandPool);
-
-        VkBufferCopy copyRegion;
-        zero(copyRegion);
-        copyRegion.size = dataSize;
-        vkCmdCopyBuffer(commandBuffer, stagingBuffer, *buffer, 1, &copyRegion);
-
-        endSingleTimeCommandBuffer(commandBuffer, device, queue, commandPool);
-    }
 }
 
 int WINAPI
@@ -1166,7 +1154,7 @@ WinMain(
     zero(poolInfo);
     poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     poolInfo.queueFamilyIndex = graphicsQueueFamilyIndex;
-    poolInfo.flags = 0;
+    poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     assert(vkCreateCommandPool(device, &poolInfo, 0, &commandPool) == VK_SUCCESS);
 
     VkShaderModule vertShaderModule = createShaderModule("build/vert.spv", device);
@@ -1228,10 +1216,6 @@ WinMain(
     vertexInputInfo.vertexAttributeDescriptionCount = arrayCount(attDescriptions);
     vertexInputInfo.pVertexAttributeDescriptions = attDescriptions;
 
-    VertexIndexBuffer vertexIndexBuffer = { 0 };
-    vertexIndexBuffer.vertexData = malloc(sizeof(Vertex) * 1000);
-    vertexIndexBuffer.indexData = malloc(sizeof(u16) * 1000);
-
     Rect rect1 = { 0 };
 
     rect1.topleft.x = -0.5f;
@@ -1246,31 +1230,36 @@ WinMain(
 
     Rect rect2 = moveRect(rect1, 0.1f, 0.1f);
 
-    pushRect(&vertexIndexBuffer, rect2);
-    pushRect(&vertexIndexBuffer, rect1);
+    VertexIndexBuffer vertexIndexBuffer = { 0 };
 
+    VkBuffer stagingVertexBuffer;
+    VkDeviceMemory stagingVertexBufferMemory;
     VkBuffer vertexBuffer;
     VkDeviceMemory vertexBufferMemory;
     createStagedBuffer(
         device, physicalDevice,
-        vertexIndexBuffer.vertexData,
-        sizeof(Vertex) * vertexIndexBuffer.curVertex,
+        sizeof(Vertex) * 1000,
         commandPool,
         graphicsQueue,
         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-        &vertexBuffer, &vertexBufferMemory
+        &stagingVertexBuffer, &stagingVertexBufferMemory,
+        &vertexBuffer, &vertexBufferMemory,
+        &vertexIndexBuffer.vertexData
     );
 
+    VkBuffer stagingIndexBuffer;
+    VkDeviceMemory stagingIndexBufferMemory;
     VkBuffer indexBuffer;
     VkDeviceMemory indexBufferMemory;
     createStagedBuffer(
         device, physicalDevice,
-        vertexIndexBuffer.indexData,
-        sizeof(u16) * vertexIndexBuffer.curIndex,
+        sizeof(u16) * 1000,
         commandPool,
         graphicsQueue,
         VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-        &indexBuffer, &indexBufferMemory
+        &stagingIndexBuffer, &stagingIndexBufferMemory,
+        &indexBuffer, &indexBufferMemory,
+        &vertexIndexBuffer.indexData
     );
 
     u32 textureWidth = 2;
@@ -1514,7 +1503,6 @@ WinMain(
         commandPool,
         vertexBuffer,
         indexBuffer,
-        vertexIndexBuffer.curIndex,
         descriptorSetLayout,
         textureImageView,
         textureSampler
@@ -1706,7 +1694,6 @@ WinMain(
                     commandPool,
                     vertexBuffer,
                     indexBuffer,
-                    vertexIndexBuffer.curIndex,
                     descriptorSetLayout,
                     textureImageView,
                     textureSampler
@@ -1752,6 +1739,74 @@ WinMain(
             if (xDisplacement > 0.5f || xDisplacement < -0.5f) {
                 xDirection *= -1.0f;
             }
+        }
+
+        // NOTE(sen) Update vertex/index buffer
+        vertexIndexBuffer.curIndex = 0;
+        vertexIndexBuffer.curVertex = 0;
+
+        rect2 = moveRect(rect2, xDisplacement * 0.001f, 0);
+
+        pushRect(&vertexIndexBuffer, rect2);
+        pushRect(&vertexIndexBuffer, rect1);
+
+        // NOTE(sen) Fill commands
+        {
+            vkResetCommandBuffer(swapChain.commandBuffers[imageIndex], 0);
+
+            VkCommandBufferBeginInfo beginInfo;
+            zero(beginInfo);
+            beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            beginInfo.flags = 0;
+            beginInfo.pInheritanceInfo = 0;
+            assert(vkBeginCommandBuffer(swapChain.commandBuffers[imageIndex], &beginInfo) == VK_SUCCESS);
+
+            {
+                VkBufferCopy copyRegion = { 0 };
+                copyRegion.size = sizeof(Vertex) * vertexIndexBuffer.curVertex;
+                vkCmdCopyBuffer(swapChain.commandBuffers[imageIndex], stagingVertexBuffer, vertexBuffer, 1, &copyRegion);
+            }
+
+            {
+                VkBufferCopy copyRegion = { 0 };
+                copyRegion.size = sizeof(u16) * vertexIndexBuffer.curIndex;
+                vkCmdCopyBuffer(swapChain.commandBuffers[imageIndex], stagingIndexBuffer, indexBuffer, 1, &copyRegion);
+            }
+
+            VkRenderPassBeginInfo renderPassInfo;
+            zero(renderPassInfo);
+            renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            renderPassInfo.renderPass = swapChain.renderPass;
+            renderPassInfo.framebuffer = swapChain.framebuffers[imageIndex];
+            renderPassInfo.renderArea.offset.x = 0;
+            renderPassInfo.renderArea.offset.y = 0;
+            renderPassInfo.renderArea.extent.width = (u32)swapChain.surfaceDim.x;
+            renderPassInfo.renderArea.extent.height = (u32)swapChain.surfaceDim.y;
+
+            VkClearValue clearColor = { {{0.01f, 0.01f, 0.01f, 1.0f}} };
+            renderPassInfo.clearValueCount = 1;
+            renderPassInfo.pClearValues = &clearColor;
+
+            vkCmdBeginRenderPass(swapChain.commandBuffers[imageIndex], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+            vkCmdBindPipeline(swapChain.commandBuffers[imageIndex], VK_PIPELINE_BIND_POINT_GRAPHICS, swapChain.graphicsPipeline);
+
+            VkBuffer vertexBuffers[] = { vertexBuffer };
+            VkDeviceSize offsets[] = { 0 };
+
+            vkCmdBindVertexBuffers(swapChain.commandBuffers[imageIndex], 0, 1, vertexBuffers, offsets);
+            vkCmdBindIndexBuffer(swapChain.commandBuffers[imageIndex], indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+            vkCmdBindDescriptorSets(
+                swapChain.commandBuffers[imageIndex],
+                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                pipelineLayout, 0, 1, swapChain.descriptorSets + imageIndex, 0, 0
+            );
+
+            vkCmdDrawIndexed(swapChain.commandBuffers[imageIndex], vertexIndexBuffer.curIndex, 1, 0, 0, 0);
+
+            vkCmdEndRenderPass(swapChain.commandBuffers[imageIndex]);
+
+            assert(vkEndCommandBuffer(swapChain.commandBuffers[imageIndex]) == VK_SUCCESS);
         }
 
         VkSubmitInfo submitInfo;
