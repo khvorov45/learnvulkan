@@ -51,7 +51,7 @@ typedef union v3 {
 } v3;
 
 typedef struct Vertex {
-    v2 pos;
+    v3 pos;
     v3 color;
     v2 texture;
 } Vertex;
@@ -64,8 +64,8 @@ typedef struct m4 {
 } m4;
 
 typedef struct Rect {
-    v2 topleft;
-    v2 bottomright;
+    v3 topleft;
+    v3 bottomright;
     v2 textopleft;
     v2 texbottomright;
 } Rect;
@@ -383,17 +383,21 @@ LRESULT windowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 }
 
 Rect
-moveRect(Rect rect, f32 byx, f32 byy) {
+moveRect(Rect rect, f32 byx, f32 byy, f32 byz) {
     Rect result = rect;
     result.topleft.x += byx;
     result.topleft.y += byy;
+    result.topleft.z += byz;
     result.bottomright.x += byx;
     result.bottomright.y += byy;
+    result.bottomright.z += byz;
     return result;
 }
 
 void
 pushRect(VertexIndexBuffer* buffer, Rect rect) {
+
+    assert(rect.topleft.z == rect.bottomright.z);
 
     v3 black = { 0 };
 
@@ -401,7 +405,7 @@ pushRect(VertexIndexBuffer* buffer, Rect rect) {
     buffer->vertexData[buffer->curVertex].color = black;
     buffer->vertexData[buffer->curVertex].texture = rect.textopleft;
 
-    v2 topright = rect.topleft;
+    v3 topright = rect.topleft;
     topright.x = rect.bottomright.x;
 
     v2 textopright = rect.textopleft;
@@ -411,7 +415,7 @@ pushRect(VertexIndexBuffer* buffer, Rect rect) {
     buffer->vertexData[buffer->curVertex + 1].color = black;
     buffer->vertexData[buffer->curVertex + 1].texture = textopright;
 
-    v2 bottomleft = rect.bottomright;
+    v3 bottomleft = rect.bottomright;
     bottomleft.x = rect.topleft.x;
 
     v2 texbottomleft = rect.texbottomright;
@@ -1186,7 +1190,7 @@ WinMain(
     zero(posDescription);
     posDescription.binding = 0;
     posDescription.location = 0;
-    posDescription.format = VK_FORMAT_R32G32_SFLOAT;
+    posDescription.format = VK_FORMAT_R32G32B32_SFLOAT;
     posDescription.offset = offsetof(Vertex, pos);
 
     VkVertexInputAttributeDescription colDescription;
@@ -1215,20 +1219,6 @@ WinMain(
     vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
     vertexInputInfo.vertexAttributeDescriptionCount = arrayCount(attDescriptions);
     vertexInputInfo.pVertexAttributeDescriptions = attDescriptions;
-
-    Rect rect1 = { 0 };
-
-    rect1.topleft.x = -0.5f;
-    rect1.topleft.y = -0.5f;
-    rect1.bottomright.x = 0.5f;
-    rect1.bottomright.y = 0.5f;
-
-    rect1.textopleft.x = 0.0f;
-    rect1.textopleft.y = 1.0f;
-    rect1.texbottomright.x = 1.0f;
-    rect1.texbottomright.y = 0.0f;
-
-    Rect rect2 = moveRect(rect1, 0.1f, 0.1f);
 
     u32 textureWidth = 2;
     u32 textureHeight = 2;
@@ -1522,6 +1512,22 @@ WinMain(
     HCURSOR cursorSizeNS = LoadCursorW(0, (LPWSTR)IDC_SIZENS);
     HCURSOR cursorSizeNWSE = LoadCursorW(0, (LPWSTR)IDC_SIZENWSE);
 
+    Rect rect1 = { 0 };
+
+    rect1.topleft.x = -0.5f;
+    rect1.topleft.y = -0.5f;
+    rect1.topleft.z = 0.0f;
+    rect1.bottomright.x = 0.5f;
+    rect1.bottomright.y = 0.5f;
+    rect1.bottomright.z = 0.0f;
+
+    rect1.textopleft.x = 0.0f;
+    rect1.textopleft.y = 1.0f;
+    rect1.texbottomright.x = 1.0f;
+    rect1.texbottomright.y = 0.0f;
+
+    Rect rect2 = moveRect(rect1, 0.1f, 0.1f, -0.5f);
+
     b32 minimized = false;
 
     f32 angle = 0.0f;
@@ -1685,7 +1691,7 @@ WinMain(
                 m4scale(1.0f, 1.0f, 1.0f)
             ));
             ubo.view = m4transpose(
-                m4lookat(v3new(0.0f, -0.000001f, 1.5f), v3new(0.0f, 0.0f, 0.0f), v3new(0.0f, 0.0f, 1.0f))
+                m4lookat(v3new(0.0f, -1.0f, 1.5f), v3new(0.0f, 0.0f, 0.0f), v3new(0.0f, 0.0f, 1.0f))
             );
             ubo.proj = m4transpose(m4perspective(TAU32 / 8, swapChain.surfaceDim.x / swapChain.surfaceDim.y, 0.1f, 10.0f));
 
@@ -1711,10 +1717,10 @@ WinMain(
         vertexIndexBuffer->curIndex = 0;
         vertexIndexBuffer->curVertex = 0;
 
-        rect2 = moveRect(rect2, xDisplacement * 0.001f, 0);
+        rect2 = moveRect(rect2, xDisplacement * 0.001f, 0, 0);
 
-        pushRect(vertexIndexBuffer, rect2);
         pushRect(vertexIndexBuffer, rect1);
+        pushRect(vertexIndexBuffer, rect2);
 
         // NOTE(sen) Fill commands
         {
