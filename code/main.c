@@ -102,6 +102,9 @@ typedef struct SwapChain {
     VkDescriptorSetLayout* layouts;
     VkDescriptorSet* descriptorSets;
     VertexIndexBuffer* vertexIndexBuffer;
+    VkImage depthImage;
+    VkDeviceMemory depthImageMemory;
+    VkImageView depthImageView;
 } SwapChain;
 
 static b32 globalRunning = true;
@@ -553,6 +556,65 @@ createMappedBuffer(
 }
 
 void
+createImage(
+    VkDevice device, VkPhysicalDevice physicalDevice,
+    u32 width, u32 height,
+    VkFormat format,
+    VkImageUsageFlags usage,
+    VkImageLayout initialLayout,
+    VkImage* image, VkDeviceMemory* imageMemory
+) {
+
+    VkImageCreateInfo info = { 0 };
+    info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    info.imageType = VK_IMAGE_TYPE_2D;
+    info.extent.width = width;
+    info.extent.height = height;
+    info.extent.depth = 1;
+    info.mipLevels = 1;
+    info.arrayLayers = 1;
+    info.format = format;
+    info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    info.initialLayout = initialLayout;
+    info.usage = usage;
+    info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    info.samples = VK_SAMPLE_COUNT_1_BIT;
+
+    assert(vkCreateImage(device, &info, 0, image) == VK_SUCCESS);
+
+    VkMemoryRequirements memRequirements;
+    vkGetImageMemoryRequirements(device, *image, &memRequirements);
+
+    VkMemoryAllocateInfo allocInfo = { 0 };
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = findMemoryTypeIndex(
+        physicalDevice, memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+    );
+
+    assert(vkAllocateMemory(device, &allocInfo, 0, imageMemory) == VK_SUCCESS);
+    assert(vkBindImageMemory(device, *image, *imageMemory, 0) == VK_SUCCESS);
+
+}
+
+VkImageView
+createImageView(VkDevice device, VkImage image, VkFormat format, VkImageAspectFlags aspect) {
+    VkImageViewCreateInfo viewInfo = { 0 };
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = format;
+    viewInfo.subresourceRange.aspectMask = aspect;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+    VkImageView view;
+    assert(vkCreateImageView(device, &viewInfo, 0, &view) == VK_SUCCESS);
+    return view;
+}
+
+void
 initSwapChain(
     SwapChain* swapChain,
     VkSwapchainKHR oldSwapChain,
@@ -868,6 +930,24 @@ initSwapChain(
 
     }
 
+    // NOTE(sen) Depth buffer
+    VkFormat depthFormat = VK_FORMAT_D32_SFLOAT_S8_UINT;
+    {
+        VkFormatProperties props;
+        vkGetPhysicalDeviceFormatProperties(physicalDevice, depthFormat, &props);
+        VkFormatFeatureFlagBits features = VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        assert((props.optimalTilingFeatures & features) == features);
+    }
+    createImage(
+        device, physicalDevice,
+        (u32)swapChain->surfaceDim.x, (u32)swapChain->surfaceDim.y,
+        depthFormat,
+        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+        VK_IMAGE_LAYOUT_UNDEFINED,
+        &swapChain->depthImage,
+        &swapChain->depthImageMemory
+    );
+    swapChain->depthImageView = createImageView(device, swapChain->depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
 }
 
 void
@@ -951,6 +1031,10 @@ cleanupSwapChain(SwapChain* swapChain, VkDevice device, VkCommandPool commandPoo
     }
 
     free(swapChain->vertexIndexBuffer);
+
+    vkDestroyImageView(device, swapChain->depthImageView, 0);
+    vkFreeMemory(device, swapChain->depthImageMemory, 0);
+    vkDestroyImage(device, swapChain->depthImage, 0);
 
 }
 
@@ -1243,43 +1327,25 @@ WinMain(
     memcpy(textureGpuData, texture, textureSize);
     vkUnmapMemory(device, textureStagingBufferMemory);
 
-    VkImageCreateInfo textureImageInfo = { 0 };
-    textureImageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    textureImageInfo.imageType = VK_IMAGE_TYPE_2D;
-    textureImageInfo.extent.width = textureWidth;
-    textureImageInfo.extent.height = textureHeight;
-    textureImageInfo.extent.depth = 1;
-    textureImageInfo.mipLevels = 1;
-    textureImageInfo.arrayLayers = 1;
-    textureImageInfo.format = VK_FORMAT_R8G8B8A8_SRGB;
-    textureImageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    textureImageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    textureImageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    textureImageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    textureImageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
 
     VkImage textureImage;
-    assert(vkCreateImage(device, &textureImageInfo, 0, &textureImage) == VK_SUCCESS);
+    VkDeviceMemory textureImageMemory;
+    VkFormat textureFormat = VK_FORMAT_R8G8B8A8_SRGB;
+    VkImageLayout textureInitialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    createImage(
+        device, physicalDevice,
+        textureWidth, textureHeight,
+        textureFormat,
+        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        textureInitialLayout,
+        &textureImage, &textureImageMemory
+    );
 
     {
-        VkMemoryRequirements memRequirements;
-        vkGetImageMemoryRequirements(device, textureImage, &memRequirements);
-
-        VkMemoryAllocateInfo allocInfo = { 0 };
-        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocInfo.allocationSize = memRequirements.size;
-        allocInfo.memoryTypeIndex = findMemoryTypeIndex(
-            physicalDevice, memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
-        );
-
-        VkDeviceMemory textureImageMemory;
-        assert(vkAllocateMemory(device, &allocInfo, 0, &textureImageMemory) == VK_SUCCESS);
-        assert(vkBindImageMemory(device, textureImage, textureImageMemory, 0) == VK_SUCCESS);
-
         VkCommandBuffer commandBuffer = beginSingleTimeCommandBuffer(device, commandPool);
 
         cmdTransitionLayout(
-            commandBuffer, textureImage, textureImageInfo.initialLayout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
+            commandBuffer, textureImage, textureInitialLayout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
         );
 
         VkBufferImageCopy region = { 0 };
@@ -1315,20 +1381,7 @@ WinMain(
         endSingleTimeCommandBuffer(commandBuffer, device, graphicsQueue, commandPool);
     }
 
-    VkImageView textureImageView;
-    {
-        VkImageViewCreateInfo viewInfo = { 0 };
-        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        viewInfo.image = textureImage;
-        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.format = textureImageInfo.format;
-        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        viewInfo.subresourceRange.baseMipLevel = 0;
-        viewInfo.subresourceRange.levelCount = 1;
-        viewInfo.subresourceRange.baseArrayLayer = 0;
-        viewInfo.subresourceRange.layerCount = 1;
-        assert(vkCreateImageView(device, &viewInfo, 0, &textureImageView) == VK_SUCCESS)
-    }
+    VkImageView textureImageView = createImageView(device, textureImage, textureFormat, VK_IMAGE_ASPECT_COLOR_BIT);
 
     VkSamplerCreateInfo samplerInfo = { 0 };
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
